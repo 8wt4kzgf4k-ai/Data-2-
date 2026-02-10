@@ -13,12 +13,18 @@ th { background:#1e293b; }
 button { margin:10px; padding:10px 15px; background:#38bdf8; color:#0f172a; border:none; border-radius:5px; cursor:pointer; font-weight:bold; }
 button:hover { background:#0ea5e9; }
 .stats { margin:20px auto; width:95%; max-width:900px; background:#1e293b; padding:10px; border-radius:10px; text-align:left; }
+#loadingBarContainer { width:80%; background:#1e293b; border-radius:10px; margin:20px auto; height:25px; }
+#loadingBar { width:0%; height:100%; background:#38bdf8; border-radius:10px; text-align:center; color:#0f172a; line-height:25px; font-weight:bold; }
 </style>
 </head>
 <body>
 
 <h1>📊 Advanced USDCHF Streak Backtest</h1>
 <p>Backtest for 3+ consecutive candles across 1 Minute, 3 Minute, 5 Minute candles</p>
+
+<div id="loadingBarContainer">
+  <div id="loadingBar">0%</div>
+</div>
 
 <button onclick="downloadCSV()">Download CSV</button>
 
@@ -36,15 +42,25 @@ button:hover { background:#0ea5e9; }
 </div>
 
 <script>
-const API_KEY = "b3f898dec7014a23aeddd60f2cb30fc6";
+const API_KEY = "YOUR_API_KEY_HERE";
 const SYMBOL = "USD/CHF";
 const TIMEFRAMES = ["1min","3min","5min"];
 const TF_LABELS = { "1min":"1 Minute", "3min":"3 Minute", "5min":"5 Minute" };
-const TOTAL_CANDLES = 5000; // total candles per TF
-const CHUNK_SIZE = 1000;    // candles per request
+const TOTAL_CANDLES = 5000;
+const CHUNK_SIZE = 1000;
 
 let loggedTimes = new Set();
 let csvData = [["Time","Timeframe","Direction","Streak","RSI","Momentum","WilliamsR","BodySize","ATR","Session","Gap"]];
+let totalChunks = TIMEFRAMES.length * Math.ceil(TOTAL_CANDLES / CHUNK_SIZE);
+let completedChunks = 0;
+
+// Loading bar
+function updateLoadingBar() {
+  const percent = Math.floor((completedChunks/totalChunks)*100);
+  const bar = document.getElementById("loadingBar");
+  bar.style.width = percent + "%";
+  bar.innerText = percent + "%";
+}
 
 // Market session helper
 function getSession(hour){
@@ -53,7 +69,7 @@ function getSession(hour){
   else return "NY";
 }
 
-// Chunked API fetch
+// Chunked API fetch with loading
 async function getCandles(interval, total, chunkSize){
   let allCandles = [];
   let remaining = total;
@@ -69,11 +85,16 @@ async function getCandles(interval, total, chunkSize){
         console.error("No data from API:", data);
         break;
       }
-      let chunk = data.values.reverse(); // oldest first
+      let chunk = data.values.reverse();
       allCandles = chunk.concat(allCandles);
       remaining -= chunk.length;
       startDate = chunk[0].datetime;
-      if(chunk.length<chunkSize) break; // no more historical data
+
+      // Update loading
+      completedChunks++;
+      updateLoadingBar();
+
+      if(chunk.length < chunkSize) break;
     } catch(e){
       console.error("Fetch error:", e);
       break;
@@ -85,52 +106,44 @@ async function getCandles(interval, total, chunkSize){
 // Indicators
 function rsi(closes, period=14){
   let gains=0, losses=0;
-  for(let i=1;i<=period;i++){
-    let diff = closes[i]-closes[i-1];
-    if(diff>0) gains+=diff; else losses-=diff;
-  }
-  let rs = gains / (losses||1);
-  return 100 - (100/(1+rs));
+  for(let i=1;i<=period;i++){ let diff=closes[i]-closes[i-1]; if(diff>0) gains+=diff; else losses-=diff; }
+  let rs=gains/(losses||1); return 100-(100/(1+rs));
 }
-
 function momentum(closes, period=10){ return closes[closes.length-1]-closes[closes.length-1-period]; }
 function williamsR(highs,lows,closes,period=14){ let hh=Math.max(...highs.slice(-period)); let ll=Math.min(...lows.slice(-period)); return ((hh-closes[closes.length-1])/(hh-ll))*-100; }
 function atr(highs,lows,closes,period=14){ let trs=[]; for(let i=1;i<highs.length;i++){ let tr=Math.max(highs[i]-lows[i], Math.abs(highs[i]-closes[i-1]), Math.abs(lows[i]-closes[i-1])); trs.push(tr); } return trs.slice(-period).reduce((a,b)=>a+b,0)/period; }
 
-// Log a streak
+// Log streak
 function logRow(time,tf,dir,streak,rsiV,momV,willV,body,atrV,session,gap){
-  const key = tf+"_"+time;
+  const key=tf+"_"+time;
   if(loggedTimes.has(key)) return;
   loggedTimes.add(key);
   const tfLabel = TF_LABELS[tf] || tf;
-
-  csvData.push([time,tfLabel,dir,streak,rsiV.toFixed(2),momV.toFixed(5),willV.toFixed(2),
-                body.toFixed(5),atrV.toFixed(5),session,gap.toFixed(5)]);
+  csvData.push([time,tfLabel,dir,streak,rsiV.toFixed(2),momV.toFixed(5),willV.toFixed(2),body.toFixed(5),atrV.toFixed(5),session,gap.toFixed(5)]);
 
   const table=document.getElementById("logTable");
   const row=table.insertRow(1);
-  [time,tfLabel,dir,streak,rsiV.toFixed(2),momV.toFixed(5),willV.toFixed(2),
-   body.toFixed(5),atrV.toFixed(5),session,gap.toFixed(5)].forEach((v,i)=>row.insertCell(i).innerText=v);
+  [time,tfLabel,dir,streak,rsiV.toFixed(2),momV.toFixed(5),willV.toFixed(2),body.toFixed(5),atrV.toFixed(5),session,gap.toFixed(5)].forEach((v,i)=>row.insertCell(i).innerText=v);
 }
 
-// Download CSV
+// CSV download
 function downloadCSV(){
-  let csvContent = "data:text/csv;charset=utf-8," + csvData.map(e=>e.join(",")).join("\n");
+  let csvContent="data:text/csv;charset=utf-8,"+csvData.map(e=>e.join(",")).join("\n");
   const encodedUri = encodeURI(csvContent);
-  const link = document.createElement("a");
-  link.setAttribute("href", encodedUri);
+  const link=document.createElement("a");
+  link.setAttribute("href",encodedUri);
   link.setAttribute("download","streak_backtest.csv");
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
 }
 
-// Update stats
+// Stats
 function updateStats(){
   let statsText="";
   for(const tf of TIMEFRAMES){
-    const tfLabel = TF_LABELS[tf];
-    const rows = csvData.slice(1).filter(r=>r[1]===tfLabel);
+    const tfLabel=TF_LABELS[tf];
+    const rows=csvData.slice(1).filter(r=>r[1]===tfLabel);
     let n=rows.length, up=0, down=0, rsiSum=0, momSum=0, bodySum=0;
     rows.forEach(r=>{ if(r[2]==="UP") up++; else down++; rsiSum+=parseFloat(r[4]); momSum+=parseFloat(r[5]); bodySum+=parseFloat(r[7]); });
     if(n>0) statsText+=`${tfLabel}: ${n} streaks (UP:${up}, DOWN:${down}), Avg RSI:${(rsiSum/n).toFixed(2)}, Avg Momentum:${(momSum/n).toFixed(5)}, Avg Body:${(bodySum/n).toFixed(5)}<br>`;
@@ -141,40 +154,42 @@ function updateStats(){
 // Backtest logic
 async function runBacktest(){
   for(const tf of TIMEFRAMES){
-    let candles = await getCandles(tf, TOTAL_CANDLES, CHUNK_SIZE);
+    let candles = await getCandles(tf,TOTAL_CANDLES,CHUNK_SIZE);
     if(!candles || candles.length<15) continue;
-    const closes = candles.map(c=>parseFloat(c.close));
-    const highs = candles.map(c=>parseFloat(c.high));
-    const lows = candles.map(c=>parseFloat(c.low));
-    const opens = candles.map(c=>parseFloat(c.open));
+    const closes=candles.map(c=>parseFloat(c.close));
+    const highs=candles.map(c=>parseFloat(c.high));
+    const lows=candles.map(c=>parseFloat(c.low));
+    const opens=candles.map(c=>parseFloat(c.open));
 
-    // Scan all historical candles for streaks
     for(let i=2;i<candles.length;i++){
       let streak=1; let dir=null;
       for(let j=i;j>0;j--){
-        let c = candles[j], p = candles[j-1];
+        let c=candles[j], p=candles[j-1];
         if(c.close>c.open && p.close>p.open){ if(dir===null) dir="UP"; if(dir==="UP") streak++; else break; }
-        else if(c.close<p.open && p.close<p.open){ if(dir===null) dir="DOWN"; if(dir==="DOWN") streak++; else break; }
+        else if(c.close<c.open && p.close<p.open){ if(dir===null) dir="DOWN"; if(dir==="DOWN") streak++; else break; }
         else break;
       }
       if(streak>=3){
-        const r = rsi(closes.slice(i-streak+1,i+1));
-        const m = momentum(closes.slice(0,i+1));
-        const w = williamsR(highs.slice(0,i+1),lows.slice(0,i+1),closes.slice(0,i+1));
-        const b = Math.abs(candles[i].close-candles[i].open);
-        const a = atr(highs.slice(0,i+1),lows.slice(0,i+1),closes.slice(0,i+1));
-        const lastTime = new Date(candles[i].datetime);
-        const session = getSession(lastTime.getUTCHours());
-        const gap = candles[i].open - candles[i-1].close;
-        logRow(candles[i].datetime, tf, dir, streak, r, m, w, b, a, session, gap);
-        i = i-streak+1; // skip overlapping candles
+        const r=rsi(closes.slice(i-streak+1,i+1));
+        const m=momentum(closes.slice(0,i+1));
+        const w=williamsR(highs.slice(0,i+1),lows.slice(0,i+1),closes.slice(0,i+1));
+        const b=Math.abs(candles[i].close-candles[i].open);
+        const a=atr(highs.slice(0,i+1),lows.slice(0,i+1),closes.slice(0,i+1));
+        const lastTime=new Date(candles[i].datetime);
+        const session=getSession(lastTime.getUTCHours());
+        const gap=candles[i].open-candles[i-1].close;
+        logRow(candles[i].datetime,tf,dir,streak,r,m,w,b,a,session,gap);
+        i=i-streak+1;
       }
     }
   }
   updateStats();
+  // Backtest done, fill loading bar 100%
+  completedChunks=totalChunks;
+  updateLoadingBar();
 }
 
-// Run backtest immediately
+// Run backtest
 runBacktest();
 
 </script>
