@@ -32,7 +32,7 @@
 
   <script>
   // ================= SETTINGS =================
-  const API_KEY = 'YOUR_TWELVE_DATA_KEY'; // Replace with your Twelve Data API Key
+  const API_KEY = 'f6e69ff791404a24b736a913676eca5e'; // Replace with your Twelve Data API Key
   const SYMBOL = 'EUR/USD';
   const INTERVAL = '5min';
   const MOM_LENGTH = 10;  // Momentum lookback
