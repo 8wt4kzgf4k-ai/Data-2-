@@ -7,10 +7,32 @@
         table { border-collapse: collapse; width: 100%; margin-top: 20px; }
         th, td { border: 1px solid #333; padding: 8px; text-align: center; }
         th { background-color: #eee; }
+        #progressContainer {
+            width: 100%;
+            background-color: #eee;
+            border: 1px solid #333;
+            margin-top: 20px;
+            height: 25px;
+            position: relative;
+        }
+        #progressBar {
+            width: 0%;
+            height: 100%;
+            background-color: #4caf50;
+            text-align: center;
+            line-height: 25px;
+            color: white;
+            transition: width 0.3s;
+        }
     </style>
 </head>
 <body>
     <h1>5-Min Candle Streaks & Indicator Levels</h1>
+
+    <div id="progressContainer">
+        <div id="progressBar">0%</div>
+    </div>
+
     <table id="streakTable">
         <thead>
             <tr>
@@ -36,6 +58,13 @@
 
     let allData = [];
 
+    function updateProgress(current, total) {
+        const progress = Math.floor((current / total) * 100);
+        const progressBar = document.getElementById("progressBar");
+        progressBar.style.width = progress + "%";
+        progressBar.textContent = progress + "%";
+    }
+
     async function fetchCandleBatch(offset) {
         const url = `${apiUrl}?symbol=${symbol}&interval=${interval}&limit=${limitPerRequest}&start=${offset}`;
         const response = await fetch(url);
@@ -56,8 +85,13 @@
             const offset = i * limitPerRequest;
             const batch = await fetchCandleBatch(offset);
             allData = allData.concat(batch);
+
+            // Update progress bar
+            updateProgress(i + 1, requestsNeeded);
+
             if (i < requestsNeeded - 1) await sleep(sleepTime);
         }
+        updateProgress(requestsNeeded, requestsNeeded); // Ensure 100%
         processStreaks(allData);
     }
 
@@ -68,7 +102,6 @@
             const prev = data[i - 1];
             const curr = data[i];
 
-            // Determine candle direction
             const direction = curr.close > prev.close ? "UP" : curr.close < prev.close ? "DOWN" : "NEUTRAL";
 
             if (streak.length === 0) {
@@ -83,7 +116,6 @@
                 }
             }
         }
-        // Check last streak
         if (streak.length >= 4) streaks.push(streak);
 
         displayStreaks(streaks);
