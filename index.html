@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>5-Min Candle Streaks</title>
+    <title>5-Min Candle Streaks - Twelve Data</title>
     <style>
         table { border-collapse: collapse; width: 100%; margin-top: 20px; }
         th, td { border: 1px solid #333; padding: 8px; text-align: center; }
@@ -27,123 +27,127 @@
     </style>
 </head>
 <body>
-    <h1>5-Min Candle Streaks & Indicator Levels</h1>
+<h1>5-Min Candle Streaks & Indicator Levels</h1>
 
-    <div id="progressContainer">
-        <div id="progressBar">0%</div>
-    </div>
+<div id="progressContainer">
+    <div id="progressBar">0%</div>
+</div>
 
-    <table id="streakTable">
-        <thead>
-            <tr>
-                <th>Start Time</th>
-                <th>End Time</th>
-                <th>Direction</th>
-                <th>Length</th>
-                <th>RSI Levels</th>
-                <th>Williams %R Levels</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
+<table id="streakTable">
+    <thead>
+        <tr>
+            <th>Start Time</th>
+            <th>End Time</th>
+            <th>Direction</th>
+            <th>Length</th>
+            <th>RSI</th>
+            <th>Williams %R</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
 
-    <script>
-    const apiUrl = "b3f898dec7014a23aeddd60f2cb30fc6"; // Replace with your API
-    const symbol = "EURUSD";
-    const interval = "5m"; // 5-minute candles
-    const limitPerRequest = 100;
-    const totalCandlesNeeded = 500;
-    const requestsNeeded = Math.ceil(totalCandlesNeeded / limitPerRequest);
-    const sleepTime = 7500; // 7.5 seconds for 8 requests/min
+<script>
+const apiKey = "YOUR_TWELVE_DATA_KEY"; // Replace with your Twelve Data API key
+const symbol = "EUR/USD";
+const interval = "5min";
+const totalCandles = 500; // total candles to fetch
+const limitPerRequest = 100; // max per request
+const requestsNeeded = Math.ceil(totalCandles / limitPerRequest);
+const sleepTime = 7500; // 7.5 seconds to respect 8 requests/min
 
-    let allData = [];
+let allData = [];
 
-    function updateProgress(current, total) {
-        const progress = Math.floor((current / total) * 100);
-        const progressBar = document.getElementById("progressBar");
-        progressBar.style.width = progress + "%";
-        progressBar.textContent = progress + "%";
+// Utility to pause
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Update progress bar
+function updateProgress(current, total) {
+    const progress = Math.floor((current / total) * 100);
+    const progressBar = document.getElementById("progressBar");
+    progressBar.style.width = progress + "%";
+    progressBar.textContent = progress + "%";
+}
+
+// Fetch candle batch from Twelve Data
+async function fetchCandleBatch(offset) {
+    const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=${limitPerRequest}&apikey=${apiKey}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+        console.error("API Error", response.status);
+        return [];
     }
-
-    async function fetchCandleBatch(offset) {
-        const url = `${apiUrl}?symbol=${symbol}&interval=${interval}&limit=${limitPerRequest}&start=${offset}`;
-        const response = await fetch(url);
-        if (!response.ok) {
-            console.error("API Error", response.status);
-            return [];
-        }
-        const data = await response.json();
-        return data;
+    const data = await response.json();
+    if (data.values) {
+        return data.values.reverse(); // chronological order
     }
+    return [];
+}
 
-    function sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+// Fetch all candles with delay to respect API limits
+async function fetchAllCandles() {
+    for (let i = 0; i < requestsNeeded; i++) {
+        const batch = await fetchCandleBatch(i * limitPerRequest);
+        allData = allData.concat(batch);
+        updateProgress(i + 1, requestsNeeded);
+        if (i < requestsNeeded - 1) await sleep(sleepTime);
     }
+    updateProgress(requestsNeeded, requestsNeeded);
+    processStreaks(allData);
+}
 
-    async function fetchAllCandles() {
-        for (let i = 0; i < requestsNeeded; i++) {
-            const offset = i * limitPerRequest;
-            const batch = await fetchCandleBatch(offset);
-            allData = allData.concat(batch);
+// Process streaks of 4+ candles in the same direction
+function processStreaks(data) {
+    const streaks = [];
+    let streak = [];
+    for (let i = 1; i < data.length; i++) {
+        const prev = data[i - 1];
+        const curr = data[i];
+        const direction = parseFloat(curr.close) > parseFloat(prev.close) ? "UP" : parseFloat(curr.close) < parseFloat(prev.close) ? "DOWN" : "NEUTRAL";
 
-            // Update progress bar
-            updateProgress(i + 1, requestsNeeded);
-
-            if (i < requestsNeeded - 1) await sleep(sleepTime);
-        }
-        updateProgress(requestsNeeded, requestsNeeded); // Ensure 100%
-        processStreaks(allData);
-    }
-
-    function processStreaks(data) {
-        const streaks = [];
-        let streak = [];
-        for (let i = 1; i < data.length; i++) {
-            const prev = data[i - 1];
-            const curr = data[i];
-
-            const direction = curr.close > prev.close ? "UP" : curr.close < prev.close ? "DOWN" : "NEUTRAL";
-
-            if (streak.length === 0) {
-                if (direction !== "NEUTRAL") streak.push(curr);
+        if (streak.length === 0) {
+            if (direction !== "NEUTRAL") streak.push(curr);
+        } else {
+            const lastDirection = parseFloat(streak[streak.length - 1].close) > parseFloat(streak[0].close) ? "UP" : "DOWN";
+            if (direction === lastDirection) {
+                streak.push(curr);
             } else {
-                const lastDirection = streak[0].close > streak[streak.length - 1].close ? "UP" : "DOWN";
-                if (direction === lastDirection) {
-                    streak.push(curr);
-                } else {
-                    if (streak.length >= 4) streaks.push(streak);
-                    streak = direction !== "NEUTRAL" ? [curr] : [];
-                }
+                if (streak.length >= 4) streaks.push(streak);
+                streak = direction !== "NEUTRAL" ? [curr] : [];
             }
         }
-        if (streak.length >= 4) streaks.push(streak);
-
-        displayStreaks(streaks);
     }
+    if (streak.length >= 4) streaks.push(streak);
+    displayStreaks(streaks);
+}
 
-    function displayStreaks(streaks) {
-        const tbody = document.querySelector("#streakTable tbody");
-        tbody.innerHTML = "";
+// Display streaks in table
+function displayStreaks(streaks) {
+    const tbody = document.querySelector("#streakTable tbody");
+    tbody.innerHTML = "";
 
-        streaks.forEach(streak => {
-            const rsiLevels = streak.map(c => c.rsi).join(", ");
-            const williamsLevels = streak.map(c => c.williams).join(", ");
-            const direction = streak[0].close > streak[streak.length - 1].close ? "UP" : "DOWN";
+    streaks.forEach(streak => {
+        const rsiLevels = streak.map(c => c.rsi || "-").join(", ");
+        const williamsLevels = streak.map(c => c.williams || "-").join(", ");
+        const direction = parseFloat(streak[0].close) < parseFloat(streak[streak.length - 1].close) ? "UP" : "DOWN";
 
-            const tr = document.createElement("tr");
-            tr.innerHTML = `
-                <td>${new Date(streak[0].time).toLocaleString()}</td>
-                <td>${new Date(streak[streak.length - 1].time).toLocaleString()}</td>
-                <td>${direction}</td>
-                <td>${streak.length}</td>
-                <td>${rsiLevels}</td>
-                <td>${williamsLevels}</td>
-            `;
-            tbody.appendChild(tr);
-        });
-    }
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>${new Date(streak[0].datetime).toLocaleString()}</td>
+            <td>${new Date(streak[streak.length - 1].datetime).toLocaleString()}</td>
+            <td>${direction}</td>
+            <td>${streak.length}</td>
+            <td>${rsiLevels}</td>
+            <td>${williamsLevels}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
 
-    fetchAllCandles();
-    </script>
+// Start fetching data
+fetchAllCandles();
+</script>
 </body>
 </html>
