@@ -45,15 +45,15 @@ tbody tr:nth-child(even){ background:#334155; }
 </table>
 
 <script>
-const API_KEY = "YOUR_API_KEY_HERE";
+const API_KEY = "YOUR_API_KEY_HERE"; // Replace with your Twelve Data API key
 const SYMBOL = "USD/CHF";
 const TOTAL_CANDLES = 1000;
-const CHUNK_SIZE = 200;
-const REQUEST_DELAY = 1000;
+const CHUNK_SIZE = 125;       // 1000 / 125 = 8 API calls
+const REQUEST_DELAY = 8000;   // 8 seconds to respect 8 calls/min
 
 let csvData = [["Datetime","Open","High","Low","Close","Volume","RSI14","Momentum10","Williams%R14","ATR14"]];
 
-// Update loading bar
+// Loading bar
 function updateLoadingBar(percent){
     const bar = document.getElementById("loadingBar");
     bar.style.width = percent + "%";
@@ -73,16 +73,19 @@ function rsi(closes, period=14){
     let rs = gains/(losses||1);
     return 100-(100/(1+rs));
 }
+
 function momentum(closes, period=10){
     if(closes.length <= period) return 0;
     return closes[closes.length-1]-closes[closes.length-1-period];
 }
+
 function williamsR(highs,lows,closes,period=14){
     if(closes.length<period) return 0;
     let hh=Math.max(...highs.slice(-period));
     let ll=Math.min(...lows.slice(-period));
     return ((hh-closes[closes.length-1])/(hh-ll))*-100;
 }
+
 function atr(highs,lows,closes,period=14){
     if(closes.length<period) return 0;
     let trs=[];
@@ -93,35 +96,40 @@ function atr(highs,lows,closes,period=14){
     return trs.slice(-period).reduce((a,b)=>a+b,0)/period;
 }
 
-// Fetch last 1000 candles
+// Fetch candles with rate limit
 async function getCandles(total, chunkSize){
     let allCandles=[];
-    let remaining=total;
-    let startDate=null;
-    let chunksCompleted=0;
-    let totalChunks=Math.ceil(total/chunkSize);
+    let remaining = total;
+    let startDate = null;
+    let chunksCompleted = 0;
+    let totalChunks = Math.ceil(total / chunkSize);
 
-    while(remaining>0){
-        let url=`https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=1min&outputsize=${Math.min(chunkSize,remaining)}&apikey=${API_KEY}`;
+    while(remaining > 0){
+        let url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=1min&outputsize=${Math.min(chunkSize,remaining)}&apikey=${API_KEY}`;
         if(startDate) url += `&start_date=${startDate}`;
+
         try{
             const res = await fetch(url);
             const data = await res.json();
-            if(!data.values || data.values.length===0){ console.error("No data"); break; }
-            let chunk = data.values.reverse();
+            if(!data.values || data.values.length===0){ console.error("No data from API"); break; }
+
+            let chunk = data.values.reverse(); // Oldest first
             allCandles = chunk.concat(allCandles);
             remaining -= chunk.length;
             startDate = chunk[0].datetime;
+
             chunksCompleted++;
             updateLoadingBar(Math.floor((chunksCompleted/totalChunks)*90));
-            await delay(REQUEST_DELAY);
+
+            await delay(REQUEST_DELAY); // wait before next request
             if(chunk.length < chunkSize) break;
-        } catch(e){ console.error(e); break; }
+
+        } catch(e){ console.error("Fetch error:", e); break; }
     }
     return allCandles;
 }
 
-// Populate table & CSV
+// Add a row to table
 function addRow(c){
     const tableBody = document.querySelector("#candleTable tbody");
     const row = tableBody.insertRow();
@@ -148,7 +156,7 @@ function downloadCSV(){
     document.body.removeChild(link);
 }
 
-// Main function
+// Main
 async function run(){
     const candles = await getCandles(TOTAL_CANDLES, CHUNK_SIZE);
     if(!candles || candles.length===0){ alert("No data fetched"); return; }
@@ -170,8 +178,7 @@ async function run(){
         csvData.push([c.datetime,open,high,low,close,volume,rsi14.toFixed(2),mom10.toFixed(5),will14.toFixed(2),atr14.toFixed(5)]);
     }
 
-    // Loading bar complete
-    updateLoadingBar(100);
+    updateLoadingBar(100); // complete
 }
 
 run();
