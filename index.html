@@ -3,143 +3,180 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EUR/USD 5-Min Streak Analysis</title>
+<title>EUR/USD 5-Min Candle Streaks with AO</title>
 <style>
-  body { font-family: Arial, sans-serif; padding: 20px; }
-  table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-  th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
-  th { background: #f4f4f4; }
-  #loadingContainer { width: 100%; background: #eee; margin-top: 20px; height: 25px; border-radius: 5px; overflow: hidden; }
-  #loadingBar { height: 100%; width: 0; background: #4caf50; text-align: center; color: white; line-height: 25px; }
+  body { font-family: Arial; padding: 20px; background: #f5f5f5; }
+  #progressContainer { width: 100%; background: #ddd; border-radius: 10px; overflow: hidden; margin-bottom: 20px; }
+  #progressBar { width: 0%; height: 25px; background: #4caf50; text-align: center; line-height: 25px; color: white; }
+  table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+  th, td { border: 1px solid #999; padding: 5px 10px; text-align: center; }
+  th { background-color: #eee; }
 </style>
 </head>
 <body>
 
-<h2>EUR/USD 5-Minute Candle Streak Analysis</h2>
+<h2>Fetching EUR/USD 5-Minute Candles & Detecting Streaks with AO ROC</h2>
 
-<div id="loadingContainer">
-  <div id="loadingBar">0%</div>
+<div id="progressContainer">
+  <div id="progressBar">0%</div>
 </div>
 
-<table id="resultsTable">
+<h3>Raw Candle Data</h3>
+<table id="dataTable">
   <thead>
     <tr>
-      <th>Streak Type</th>
+      <th>Datetime</th>
+      <th>Open</th>
+      <th>High</th>
+      <th>Low</th>
+      <th>Close</th>
+      <th>Volume</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<h3>Streaks (≥4 Candles) with AO ROC</h3>
+<table id="streakTable">
+  <thead>
+    <tr>
       <th>Start Time</th>
-      <th>End Time</th>
+      <th>Direction</th>
       <th>Length</th>
-      <th>AC Start</th>
-      <th>AC End</th>
-      <th>AC % Change</th>
-      <th>AC per Candle</th>
+      <th>AO Rate of Change (%)</th>
     </tr>
   </thead>
   <tbody></tbody>
 </table>
 
 <script>
-const API_KEY = 'b3f898dec7014a23aeddd60f2cb30fc6'; // Replace with your Twelve Data API Key
-const SYMBOL = 'EUR/USD';
-const INTERVAL = '5min';
-const OUTPUT_SIZE = 100; // Adjust as needed, max is 800 for free plan
-const MIN_STREAK = 3;
+const apiKey = "YOUR_TWELVE_DATA_KEY"; // Replace with your Twelve Data API key
+const symbol = "EUR/USD";
+const interval = "5min";
+const totalCandles = 100; // Number of candles to fetch
+const maxRequestsPerMinute = 8;
 
-async function fetchCandleData() {
-  const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=${OUTPUT_SIZE}&apikey=${API_KEY}&format=JSON`;
+const progressBar = document.getElementById("progressBar");
+const dataTableBody = document.querySelector("#dataTable tbody");
+const streakTableBody = document.querySelector("#streakTable tbody");
+
+// Utility: simple SMA
+function SMA(values, period) {
+  if (values.length < period) return null;
+  const slice = values.slice(-period);
+  const sum = slice.reduce((a,b) => a + b, 0);
+  return sum / period;
+}
+
+// Fetch batch respecting API limits
+async function fetchCandlesBatch(batchSize = 10) {
+  const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=${batchSize}&apikey=${apiKey}`;
   const response = await fetch(url);
   const data = await response.json();
-  return data.values.reverse(); // reverse to chronological order
+  return data.values ? data.values.reverse() : [];
 }
 
-// Fake AC calculation for demo (replace with your API AC if available)
-function calculateAC(candle) {
-  // Accelerator Oscillator = Awesome Oscillator - SMA(5 of AO)
-  // Here we simulate as random small variations
-  return parseFloat((Math.random() * 0.01 - 0.005).toFixed(4));
+// Fetch all candles respecting 8 calls/min
+async function fetchAllCandles() {
+  const candles = [];
+  let fetched = 0;
+
+  while (fetched < totalCandles) {
+    const batchSize = Math.min(10, totalCandles - fetched);
+    const batch = await fetchCandlesBatch(batchSize);
+    candles.push(...batch);
+    fetched += batch.length;
+
+    const percent = Math.floor((fetched / totalCandles) * 100);
+    progressBar.style.width = percent + "%";
+    progressBar.textContent = percent + "%";
+
+    if (fetched < totalCandles) await new Promise(r => setTimeout(r, 8000)); // wait ~8s
+  }
+  return candles;
 }
 
-function detectStreaks(candles) {
-  const streaks = [];
-  let currentStreak = [];
-  let currentDir = null;
-
-  candles.forEach((c, index) => {
-    const close = parseFloat(c.close);
-    const prevClose = index > 0 ? parseFloat(candles[index - 1].close) : close;
-
-    const dir = close > prevClose ? 'Bull' : close < prevClose ? 'Bear' : 'Neutral';
-
-    if (dir === currentDir && dir !== 'Neutral') {
-      currentStreak.push(c);
-    } else {
-      if (currentStreak.length >= MIN_STREAK) streaks.push({ type: currentDir, candles: currentStreak });
-      currentStreak = dir !== 'Neutral' ? [c] : [];
-      currentDir = dir;
-    }
-  });
-
-  if (currentStreak.length >= MIN_STREAK) streaks.push({ type: currentDir, candles: currentStreak });
-  return streaks;
-}
-
-function calculateACStreaks(streaks) {
-  return streaks.map(s => {
-    const acValues = s.candles.map(c => calculateAC(c));
-    const acStart = acValues[0];
-    const acEnd = acValues[acValues.length - 1];
-    const acChange = ((acEnd - acStart) / Math.abs(acStart || 1)) * 100;
-    const acPerCandle = (acEnd - acStart) / s.candles.length;
-    return {
-      type: s.type,
-      start: s.candles[0].datetime,
-      end: s.candles[s.candles.length - 1].datetime,
-      length: s.candles.length,
-      acStart: acStart.toFixed(4),
-      acEnd: acEnd.toFixed(4),
-      acChange: acChange.toFixed(2),
-      acPerCandle: acPerCandle.toFixed(4)
-    };
-  });
-}
-
-function updateTable(streakData) {
-  const tbody = document.querySelector('#resultsTable tbody');
-  tbody.innerHTML = '';
-  streakData.forEach(s => {
-    const row = document.createElement('tr');
+// Display raw candle data
+function displayCandles(candles) {
+  dataTableBody.innerHTML = "";
+  candles.forEach(c => {
+    const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${s.type}</td>
-      <td>${s.start}</td>
-      <td>${s.end}</td>
-      <td>${s.length}</td>
-      <td>${s.acStart}</td>
-      <td>${s.acEnd}</td>
-      <td>${s.acChange}</td>
-      <td>${s.acPerCandle}</td>
+      <td>${c.datetime}</td>
+      <td>${c.open}</td>
+      <td>${c.high}</td>
+      <td>${c.low}</td>
+      <td>${c.close}</td>
+      <td>${c.volume}</td>
     `;
-    tbody.appendChild(row);
+    dataTableBody.appendChild(row);
   });
 }
 
-function updateLoading(progress, total) {
-  const percent = Math.round((progress / total) * 100);
-  const bar = document.getElementById('loadingBar');
-  bar.style.width = percent + '%';
-  bar.textContent = percent + '%';
+// Calculate AO for candles
+function calculateAO(candles, shortPeriod = 5, longPeriod = 34) {
+  const ao = [];
+  const medianPrices = candles.map(c => (parseFloat(c.high) + parseFloat(c.low)) / 2);
+  for (let i = 0; i < candles.length; i++) {
+    const shortSMA = SMA(medianPrices.slice(0, i + 1), shortPeriod);
+    const longSMA = SMA(medianPrices.slice(0, i + 1), longPeriod);
+    ao.push(shortSMA !== null && longSMA !== null ? shortSMA - longSMA : 0);
+  }
+  return ao;
 }
 
-async function main() {
-  updateLoading(0, 1);
-  const candles = await fetchCandleData();
-  updateLoading(1, 1);
+// Determine candle direction
+function getDirection(prev, curr) {
+  const prevClose = parseFloat(prev.close);
+  const currClose = parseFloat(curr.close);
+  if (currClose > prevClose) return "Bull";
+  if (currClose < prevClose) return "Bear";
+  return "Neutral";
+}
 
-  const streaks = detectStreaks(candles);
-  const streakAC = calculateACStreaks(streaks);
-  updateTable(streakAC);
+// Detect streaks and calculate AO ROC
+function detectStreaks(candles, ao) {
+  streakTableBody.innerHTML = "";
+  let streakCount = 1;
+  let streakStart = candles[0].datetime;
+  let prevDir = getDirection(candles[0], candles[1]);
+  let startIndex = 0;
+
+  for (let i = 1; i < candles.length; i++) {
+    const currDir = getDirection(candles[i - 1], candles[i]);
+    if (currDir === prevDir && currDir !== "Neutral") {
+      streakCount++;
+    } else {
+      if (streakCount >= 4) {
+        const aoROC = ((ao[i - 1] - ao[startIndex]) / Math.abs(ao[startIndex] || 1)) * 100;
+        const row = document.createElement("tr");
+        row.innerHTML = `<td>${streakStart}</td><td>${prevDir}</td><td>${streakCount}</td><td>${aoROC.toFixed(2)}</td>`;
+        streakTableBody.appendChild(row);
+      }
+      streakCount = 1;
+      streakStart = candles[i].datetime;
+      prevDir = currDir;
+      startIndex = i;
+    }
+  }
+
+  if (streakCount >= 4) {
+    const aoROC = ((ao[candles.length - 1] - ao[startIndex]) / Math.abs(ao[startIndex] || 1)) * 100;
+    const row = document.createElement("tr");
+    row.innerHTML = `<td>${streakStart}</td><td>${prevDir}</td><td>${streakCount}</td><td>${aoROC.toFixed(2)}</td>`;
+    streakTableBody.appendChild(row);
+  }
+}
+
+// Main function
+async function main() {
+  const candles = await fetchAllCandles();
+  displayCandles(candles);
+  const ao = calculateAO(candles);
+  detectStreaks(candles, ao);
 }
 
 main();
 </script>
-
 </body>
 </html>
