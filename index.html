@@ -2,253 +2,183 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Forex Momentum + ROC Streak Alerts</title>
+<title>Advanced Forex Streak Analyzer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-  body { font-family: Arial, sans-serif; margin: 20px; }
-  table { border-collapse: collapse; margin-top: 20px; width: 100%; }
-  th, td { border: 1px solid #ccc; padding: 5px; text-align: center; }
-  th { background: #eee; }
+body { background:#0f172a; color:#e5e7eb; font-family:Arial, sans-serif; text-align:center; }
+h1 { color:#38bdf8; }
+table { margin:auto; border-collapse:collapse; width:95%; max-width:1100px; }
+th, td { border:1px solid #334155; padding:6px; font-size:13px; }
+th { background:#1e293b; }
+button { margin:10px; padding:10px 15px; background:#38bdf8; color:#0f172a; border:none; border-radius:5px; cursor:pointer; font-weight:bold; }
+button:hover { background:#0ea5e9; }
+.stats { margin:20px auto; width:95%; max-width:900px; background:#1e293b; padding:10px; border-radius:10px; text-align:left; }
 </style>
 </head>
 <body>
-<h1>Forex Momentum + ROC Streak Alerts</h1>
-<p>Symbol: <strong id="symbol">EUR/USD</strong></p>
-<p>Interval: <strong id="interval">5min</strong></p>
 
-<div id="notification-summary"></div>
+<h1>📊 Advanced USDCHF Streak Analyzer</h1>
+<p>Tracks streaks & indicators across M1, M3, M5 with extra factors</p>
+
+<button onclick="downloadCSV()">Download CSV</button>
+
+<table id="logTable">
+<tr>
+<th>Time</th><th>TF</th><th>Direction</th><th>Streak</th>
+<th>RSI</th><th>Momentum</th><th>Williams %R</th>
+<th>BodySize</th><th>ATR</th><th>Session</th><th>Gap</th>
+</tr>
+</table>
+
+<div class="stats" id="stats">
+<h3>Streak Statistics</h3>
+<p id="statText">Calculating...</p>
+</div>
 
 <script>
-const API_KEY = 'f6e69ff791404a24b736a913676eca5e'; // Replace with your key
-const SYMBOL = 'EUR/USD';
-const INTERVAL = '5min';
-const MOM_LENGTH = 10;
-const ROC_LENGTH = 14;
-const BIN_SIZE = 20; 
-const BINS = [];
-for(let i=-100;i<100;i+=BIN_SIZE) BINS.push(i);
+const API_KEY = "YOUR_API_KEY_HERE";
+const SYMBOL = "USD/CHF";
+const TIMEFRAMES = ["1min","3min","5min"];
+const LOOKBACK = 5000;
 
-let candles = []; // Cached candles
-let topZones = [];
-let lastCandleTime = null;
-let notificationLog = [];
+let loggedTimes = new Set();
+let csvData = [["Time","TF","Direction","Streak","RSI","Momentum","WilliamsR","BodySize","ATR","Session","Gap"]];
 
-// ----------------- Utility Functions -----------------
-function normalizedMomentum(closeArr, index){
-    if(index < MOM_LENGTH) return 0;
-    const mom = closeArr[index] - closeArr[index - MOM_LENGTH];
-    let maxAbs = 0;
-    for(let i=index-MOM_LENGTH+1;i<=index;i++){
-        if(i>=MOM_LENGTH){
-            const m = Math.abs(closeArr[i]-closeArr[i-MOM_LENGTH]);
-            if(m>maxAbs) maxAbs = m;
-        }
-    }
-    if(maxAbs===0) return 0;
-    return Math.max(-100, Math.min(100,(mom/maxAbs)*100));
+function getSession(hour){
+  if(hour>=0 && hour<8) return "Asia";
+  else if(hour>=8 && hour<16) return "London";
+  else return "NY";
 }
 
-function normalizedROC(closeArr,index){
-    if(index < ROC_LENGTH) return 0;
-    const r = ((closeArr[index]-closeArr[index-ROC_LENGTH])/closeArr[index-ROC_LENGTH])*100;
-    let maxAbs=0;
-    for(let i=index-ROC_LENGTH+1;i<=index;i++){
-        if(i>=ROC_LENGTH){
-            const tempR=Math.abs((closeArr[i]-closeArr[i-ROC_LENGTH])/closeArr[i-ROC_LENGTH]*100);
-            if(tempR>maxAbs) maxAbs=tempR;
-        }
-    }
-    if(maxAbs===0) return 0;
-    return Math.max(-100, Math.min(100,(r/maxAbs)*100));
+async function getCandles(interval, outputsize) {
+  const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${interval}&outputsize=${outputsize}&apikey=${API_KEY}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  return data.values ? data.values.reverse() : [];
 }
 
-// ----------------- Fetch Historical Candles -----------------
-async function fetchHistoricalCandles(){
-    const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=1000&apikey=${API_KEY}`;
-    const resp = await fetch(url);
-    const data = await resp.json();
-    if(data.status==="error"){ console.error(data); return []; }
-    return data.values.reverse();
+function rsi(closes, period=14) {
+  let gains=0, losses=0;
+  for(let i=1;i<=period;i++){
+    let diff = closes[i]-closes[i-1];
+    if(diff>0) gains+=diff; else losses-=diff;
+  }
+  let rs = gains / (losses || 1);
+  return 100 - (100/(1+rs));
 }
 
-// ----------------- Fetch Only Latest Candles -----------------
-async function fetchLatestCandles(){
-    const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=20&apikey=${API_KEY}`;
-    const resp = await fetch(url);
-    const data = await resp.json();
-    if(data.status==="error"){ console.error(data); return []; }
-    return data.values.reverse();
+function momentum(closes, period=10){
+  return closes[closes.length-1] - closes[closes.length-1-period];
 }
 
-// ----------------- Find Top Zones -----------------
-function findTopZones(candles){
-    const closeArr = candles.map(c=>parseFloat(c.close));
-    const streaksBull={}, streaksBear={};
-    const heatmapBull={}, heatmapBear={};
-
-    BINS.forEach(m=>{
-        streaksBull[m]={}; streaksBear[m]={};
-        heatmapBull[m]={}; heatmapBear[m]={};
-        BINS.forEach(r=>{
-            streaksBull[m][r]=[]; streaksBear[m][r]=[];
-            heatmapBull[m][r]=0; heatmapBear[m][r]=0;
-        });
-    });
-
-    let consecutiveCount = 1;
-    for(let i=Math.max(MOM_LENGTH,ROC_LENGTH); i<closeArr.length; i++){
-        const mom = normalizedMomentum(closeArr,i);
-        const roc = normalizedROC(closeArr,i);
-        const dir = closeArr[i] > closeArr[i-1]? 'Bull':'Bear';
-        const prevDir = closeArr[i-1] > closeArr[i-2]? 'Bull':'Bear';
-        consecutiveCount = (dir===prevDir)? consecutiveCount+1 : 1;
-
-        if(consecutiveCount >= 2){
-            const momBin=BINS.reduce((p,c)=>Math.abs(c-mom)<Math.abs(p-mom)?c:p,BINS[0]);
-            const rocBin=BINS.reduce((p,c)=>Math.abs(c-roc)<Math.abs(p-roc)?c:p,BINS[0]);
-            if(dir==='Bull'){
-                streaksBull[momBin][rocBin].push(consecutiveCount);
-                heatmapBull[momBin][rocBin]++;
-            } else {
-                streaksBear[momBin][rocBin].push(consecutiveCount);
-                heatmapBear[momBin][rocBin]++;
-            }
-        }
-    }
-
-    const collectZones = (heatmap, streaks, direction) => {
-        const zones=[];
-        BINS.forEach(m=>BINS.forEach(r=>{
-            if(heatmap[m][r]>0){
-                zones.push({
-                    momentum: m,
-                    roc: r,
-                    direction: direction,
-                    streaks: streaks[m][r],
-                    freq: heatmap[m][r],
-                    longest: Math.max(...streaks[m][r])
-                });
-            }
-        }));
-        zones.sort((a,b)=>b.freq - a.freq);
-        return zones.slice(0,3);
-    }
-
-    return [
-        ...collectZones(heatmapBull, streaksBull,'Bull'),
-        ...collectZones(heatmapBear, streaksBear,'Bear')
-    ];
+function williamsR(highs,lows,closes,period=14){
+  let hh = Math.max(...highs.slice(-period));
+  let ll = Math.min(...lows.slice(-period));
+  return ((hh - closes[closes.length-1]) / (hh - ll)) * -100;
 }
 
-// ----------------- Check Latest Candle -----------------
-function checkCandle(candle){
-    if(lastCandleTime === candle.datetime) return;
-    lastCandleTime = candle.datetime;
-
-    const closeArr = candles.map(c=>parseFloat(c.close));
-    const index = candles.length-1;
-    const mom = normalizedMomentum(closeArr, index);
-    const roc = normalizedROC(closeArr, index);
-
-    topZones.forEach(zone=>{
-        if(mom >= zone.momentum && mom < zone.momentum+BIN_SIZE &&
-           roc >= zone.roc && roc < zone.roc+BIN_SIZE){
-
-            const avgStreak = Math.round(zone.streaks.reduce((a,b)=>a+b,0)/zone.streaks.length);
-            const maxStreak = Math.max(...zone.streaks);
-
-            sendNotification(zone, avgStreak, maxStreak, candle.datetime);
-        }
-    });
-
-    updateActualStreaks();
-    showNotificationSummary();
+function atr(highs,lows,closes,period=14){
+  let trs=[];
+  for(let i=1;i<highs.length;i++){
+    let tr = Math.max(highs[i]-lows[i], Math.abs(highs[i]-closes[i-1]), Math.abs(lows[i]-closes[i-1]));
+    trs.push(tr);
+  }
+  let sum = trs.slice(-period).reduce((a,b)=>a+b,0);
+  return sum/period;
 }
 
-// ----------------- Send Browser Notification -----------------
-function sendNotification(zone, avgStreak, maxStreak, candleTime){
-    const body = `${zone.direction} streak likely ~${avgStreak} candles (max: ${maxStreak})\n`+
-                 `Momentum: ${zone.momentum}-${zone.momentum+BIN_SIZE}, ROC: ${zone.roc}-${zone.roc+BIN_SIZE}`;
-
-    if("Notification" in window && Notification.permission==="granted"){
-        new Notification(`Top Zone Alert!`, { body });
-    } else if("Notification" in window && Notification.permission!=="denied"){
-        Notification.requestPermission().then(p=>{
-            if(p==="granted") new Notification(`Top Zone Alert!`, { body });
-        });
-    }
-
-    notificationLog.push({
-        candleTime: candleTime,
-        direction: zone.direction,
-        momentum: zone.momentum,
-        roc: zone.roc,
-        estimated: avgStreak,
-        actual: null
-    });
+function detectStreak(candles){
+  let streak=1;
+  let dir=null;
+  for(let i=candles.length-1;i>0;i--){
+    let c = candles[i];
+    let p = candles[i-1];
+    if(c.close > c.open && p.close > p.open){
+      if(dir===null) dir="UP";
+      if(dir==="UP") streak++;
+      else break;
+    } else if(c.close < c.open && p.close < p.open){
+      if(dir===null) dir="DOWN";
+      if(dir==="DOWN") streak++;
+      else break;
+    } else break;
+  }
+  return {streak,dir};
 }
 
-// ----------------- Update Actual Streaks -----------------
-function updateActualStreaks(){
-    const closeArr = candles.map(c=>parseFloat(c.close));
-    notificationLog.forEach(entry => {
-        if(entry.actual === null){
-            const startIndex = candles.findIndex(c => c.datetime === entry.candleTime);
-            if(startIndex >= 0){
-                let count = 1;
-                const dir = entry.direction;
-                for(let i=startIndex+1; i<closeArr.length; i++){
-                    const currDir = closeArr[i] > closeArr[i-1] ? 'Bull' : 'Bear';
-                    if(currDir === dir) count++;
-                    else break;
-                }
-                entry.actual = count;
-            }
-        }
-    });
+function logRow(time,tf,dir,streak,rsiV,momV,willV,body,atrV,session,gap){
+  const key = tf+"_"+time;
+  if(loggedTimes.has(key)) return;
+  loggedTimes.add(key);
+  csvData.push([time,tf,dir,streak,rsiV.toFixed(2),momV.toFixed(5),willV.toFixed(2),body.toFixed(5),atrV.toFixed(5),session,gap.toFixed(5)]);
+
+  const table=document.getElementById("logTable");
+  const row=table.insertRow(1);
+  [time,tf,dir,streak,rsiV.toFixed(2),momV.toFixed(5),willV.toFixed(2),body.toFixed(5),atrV.toFixed(5),session,gap.toFixed(5)].forEach((v,i)=>row.insertCell(i).innerText=v);
 }
 
-// ----------------- Display Summary Table -----------------
-function showNotificationSummary(){
-    if(notificationLog.length===0) return;
-    let table = '<table><tr><th>Time</th><th>Dir</th><th>Momentum</th><th>ROC</th><th>Est Streak</th><th>Actual Streak</th></tr>';
-    notificationLog.forEach(n=>{
-        table += `<tr>
-            <td>${n.candleTime}</td>
-            <td>${n.direction}</td>
-            <td>${n.momentum}</td>
-            <td>${n.roc}</td>
-            <td>${n.estimated}</td>
-            <td>${n.actual !== null ? n.actual : '-'}</td>
-        </tr>`;
-    });
-    table += '</table>';
-    document.getElementById('notification-summary').innerHTML = table;
+function downloadCSV() {
+  let csvContent = "data:text/csv;charset=utf-8," 
+      + csvData.map(e=>e.join(",")).join("\n");
+  const encodedUri = encodeURI(csvContent);
+  const link=document.createElement("a");
+  link.setAttribute("href",encodedUri);
+  link.setAttribute("download","streak_data.csv");
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
-// ----------------- Main -----------------
-async function main(){
-    candles = await fetchHistoricalCandles();
-    if(candles.length===0){ alert("No data fetched!"); return; }
-
-    topZones = findTopZones(candles);
-
-    if("Notification" in window && Notification.permission!=="granted"){
-        Notification.requestPermission();
-    }
-
-    // Check latest candles every minute (only last 20)
-    setInterval(async ()=>{
-        const latestCandles = await fetchLatestCandles();
-        latestCandles.forEach(c => {
-            if(!candles.find(x=>x.datetime===c.datetime)) candles.push(c);
-        });
-        if(candles.length>0) checkCandle(candles[candles.length-1]);
-    }, 60*1000);
+function updateStats(){
+  let upCount=0, downCount=0, totalRSI=0, totalMom=0, totalBody=0;
+  for(let i=1;i<csvData.length;i++){
+    let row = csvData[i];
+    let dir = row[2];
+    let rsiV = parseFloat(row[4]);
+    let momV = parseFloat(row[5]);
+    let bodyV = parseFloat(row[7]);
+    if(dir==="UP") upCount++; else downCount++;
+    totalRSI+=rsiV; totalMom+=momV; totalBody+=bodyV;
+  }
+  let n = csvData.length-1;
+  document.getElementById("statText").innerHTML = `
+    Total streaks: ${n}<br>
+    UP streaks: ${upCount}, DOWN streaks: ${downCount}<br>
+    Avg RSI: ${(totalRSI/n).toFixed(2)}, Avg Momentum: ${(totalMom/n).toFixed(5)}, Avg Body: ${(totalBody/n).toFixed(5)}
+  `;
 }
 
-document.getElementById('symbol').innerText = SYMBOL;
-document.getElementById('interval').innerText = INTERVAL;
-main();
+async function updateTF(tf){
+  let candles = await getCandles(tf, LOOKBACK);
+  if(!candles || candles.length<15) return;
+  const closes = candles.map(c=>parseFloat(c.close));
+  const highs = candles.map(c=>parseFloat(c.high));
+  const lows = candles.map(c=>parseFloat(c.low));
+  const opens = candles.map(c=>parseFloat(c.open));
+
+  const {streak,dir} = detectStreak(candles);
+  if(streak>=3){
+    const r = rsi(closes);
+    const m = momentum(closes);
+    const w = williamsR(highs,lows,closes);
+    const b = Math.abs(candles[candles.length-1].close - candles[candles.length-1].open);
+    const a = atr(highs,lows,closes);
+    const lastTime = new Date(candles[candles.length-1].datetime);
+    const session = getSession(lastTime.getUTCHours());
+    const gap = candles[candles.length-1].open - candles[candles.length-2].close;
+    logRow(candles[candles.length-1].datetime, tf, dir, streak, r, m, w, b, a, session, gap);
+  }
+}
+
+async function updateAll(){
+  for(const tf of TIMEFRAMES){
+    await updateTF(tf);
+  }
+  updateStats();
+}
+
+updateAll();
+setInterval(updateAll,60000);
 </script>
 </body>
 </html>
