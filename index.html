@@ -2,233 +2,177 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Forex Normalized Momentum + ROC Consecutive Candle Analysis</title>
+<title>Forex Momentum + ROC Streak Heatmap</title>
 <style>
   body { font-family: Arial, sans-serif; margin: 20px; }
-  table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-  th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+  table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: 12px; }
+  th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
   th { background-color: #f4f4f4; }
-  .bull { background-color: #d4f8d4; }
-  .bear { background-color: #f8d4d4; }
+  .highlight { border: 2px solid red; font-weight: bold; }
 </style>
 </head>
 <body>
-<h1>Forex Normalized Momentum + ROC Consecutive Candle Analysis</h1>
+<h1>Forex Momentum + ROC Consecutive Candle Heatmap</h1>
 <p>Symbol: <strong id="symbol">EUR/USD</strong></p>
 <p>Interval: <strong id="interval">5min</strong></p>
 
-<h2>Detailed Candle Analysis</h2>
-<table id="results">
+<h2>Heatmap: Frequency of Consecutive Candles</h2>
+<p>Higher numbers = more consistent streaks</p>
+<table id="heatmap">
   <thead>
     <tr>
-      <th>Candle Index</th>
-      <th>Direction</th>
-      <th>Normalized Momentum (%)</th>
-      <th>Momentum Level</th>
-      <th>Normalized ROC (%)</th>
-      <th>ROC Level</th>
-      <th>Consecutive Count</th>
+      <th>Momentum \\ ROC</th>
+      <!-- ROC bins added dynamically -->
     </tr>
   </thead>
   <tbody></tbody>
 </table>
 
-<h2>Summary</h2>
-<table id="summary">
+<h2>Top Zones</h2>
+<table id="topzones">
   <thead>
     <tr>
       <th>Direction</th>
-      <th>Number of Streaks</th>
-      <th>Max Consecutive Candles</th>
-      <th>Avg Normalized Momentum</th>
-      <th>Avg Normalized ROC</th>
+      <th>Momentum Bin</th>
+      <th>ROC Bin</th>
+      <th>Frequency</th>
     </tr>
   </thead>
   <tbody></tbody>
 </table>
 
 <script>
-const API_KEY = 'f6e69ff791404a24b736a913676eca5e'; // Replace with your Twelve Data API Key
+const API_KEY = 'YOUR_TWELVE_DATA_KEY'; // Replace with your key
 const SYMBOL = 'EUR/USD';
 const INTERVAL = '5min';
-const MOM_LENGTH = 10;       // Momentum lookback
-const ROC_LENGTH = 14;       // ROC lookback
-const MIN_CONSECUTIVE = 2;   // Minimum consecutive candles to count
+const MOM_LENGTH = 10;
+const ROC_LENGTH = 14;
+const MIN_CONSECUTIVE = 2;
 
-// Thresholds for normalized levels (-100 → +100)
-const MOM_LEVELS = { weak: 20, strong: 50 };
-const ROC_LEVELS = { weak: 20, strong: 50 };
+// Bins for heatmap
+const BIN_SIZE = 20; 
+const BINS = [];
+for(let i=-100;i<100;i+=BIN_SIZE) BINS.push(i);
 
-document.getElementById('symbol').innerText = SYMBOL;
-document.getElementById('interval').innerText = INTERVAL;
-
-// ================= UTILITY FUNCTIONS =================
-
-// Normalized Momentum (-100 → +100)
-function normalizedMomentum(closeArr, index, lookback=MOM_LENGTH) {
-  const mom = closeArr[index] - closeArr[index - MOM_LENGTH];
-  let maxAbs = 0;
-  for (let i = index - lookback + 1; i <= index; i++) {
-    if (i >= MOM_LENGTH) {
-      const m = Math.abs(closeArr[i] - closeArr[i - MOM_LENGTH]);
-      if (m > maxAbs) maxAbs = m;
+// ----------------- Utility Functions -----------------
+function normalizedMomentum(closeArr, index){
+    const mom = closeArr[index] - closeArr[index - MOM_LENGTH];
+    let maxAbs = 0;
+    for(let i=index-MOM_LENGTH+1;i<=index;i++){
+        if(i>=MOM_LENGTH){
+            const m = Math.abs(closeArr[i]-closeArr[i-MOM_LENGTH]);
+            if(m>maxAbs) maxAbs = m;
+        }
     }
-  }
-  if (maxAbs === 0) return 0;
-  return Math.max(-100, Math.min(100, (mom / maxAbs) * 100));
+    if(maxAbs===0) return 0;
+    return Math.max(-100, Math.min(100,(mom/maxAbs)*100));
 }
 
-// Normalized ROC (-100 → +100)
-function normalizedROC(closeArr, index, lookback=ROC_LENGTH) {
-  const r = ((closeArr[index] - closeArr[index - ROC_LENGTH]) / closeArr[index - ROC_LENGTH]) * 100;
-  let maxAbs = 0;
-  for (let i = index - lookback + 1; i <= index; i++) {
-    if (i >= ROC_LENGTH) {
-      const tempR = Math.abs((closeArr[i] - closeArr[i - ROC_LENGTH]) / closeArr[i - ROC_LENGTH] * 100);
-      if (tempR > maxAbs) maxAbs = tempR;
+function normalizedROC(closeArr,index){
+    const r = ((closeArr[index]-closeArr[index-ROC_LENGTH])/closeArr[index-ROC_LENGTH])*100;
+    let maxAbs=0;
+    for(let i=index-ROC_LENGTH+1;i<=index;i++){
+        if(i>=ROC_LENGTH){
+            const tempR=Math.abs((closeArr[i]-closeArr[i-ROC_LENGTH])/closeArr[i-ROC_LENGTH]*100);
+            if(tempR>maxAbs) maxAbs=tempR;
+        }
     }
-  }
-  if (maxAbs === 0) return 0;
-  return Math.max(-100, Math.min(100, (r / maxAbs) * 100));
+    if(maxAbs===0) return 0;
+    return Math.max(-100, Math.min(100,(r/maxAbs)*100));
 }
 
-// Determine levels based on thresholds
-function momentumLevel(momNorm) {
-  if (momNorm >= MOM_LEVELS.strong) return 'Strong Bull';
-  if (momNorm > MOM_LEVELS.weak) return 'Weak Bull';
-  if (momNorm <= -MOM_LEVELS.strong) return 'Strong Bear';
-  if (momNorm < -MOM_LEVELS.weak) return 'Weak Bear';
-  return 'Neutral';
-}
-
-function rocLevel(rocNorm) {
-  if (rocNorm >= ROC_LEVELS.strong) return 'Strong Bull';
-  if (rocNorm > ROC_LEVELS.weak) return 'Weak Bull';
-  if (rocNorm <= -ROC_LEVELS.strong) return 'Strong Bear';
-  if (rocNorm < -ROC_LEVELS.weak) return 'Weak Bear';
-  return 'Neutral';
-}
-
-// ================= FETCH DATA =================
-async function fetchData() {
-  const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=5000&apikey=${API_KEY}`;
-  try {
+// ----------------- Fetch Data -----------------
+async function fetchCandles(){
+    const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=5000&apikey=${API_KEY}`;
     const resp = await fetch(url);
     const data = await resp.json();
-    if(data.status === "error") { console.error(data); return []; }
-    return data.values.reverse(); // oldest first
-  } catch(err) { console.error(err); return []; }
+    if(data.status==="error"){ console.error(data); return []; }
+    return data.values.reverse();
 }
 
-// ================= ANALYSIS =================
-function analyzeCandles(candles) {
-  const closeArr = candles.map(c => parseFloat(c.close));
-  const results = [];
-  let consecutiveCount = 1;
+// ----------------- Heatmap Analysis -----------------
+function analyzeHeatmap(candles){
+    const closeArr = candles.map(c=>parseFloat(c.close));
+    const heatmapBull={}, heatmapBear={};
+    BINS.forEach(m=>{heatmapBull[m]={}; heatmapBear[m]={}; BINS.forEach(r=>{heatmapBull[m][r]=0; heatmapBear[m][r]=0;})});
 
-  for (let i = Math.max(MOM_LENGTH, ROC_LENGTH); i < closeArr.length; i++) {
-    const momNorm = normalizedMomentum(closeArr, i);
-    const rocNorm = normalizedROC(closeArr, i);
-    const direction = closeArr[i] > closeArr[i - 1] ? 'Bull' : 'Bear';
-    const prevDirection = closeArr[i - 1] > closeArr[i - 2] ? 'Bull' : 'Bear';
-    consecutiveCount = (direction === prevDirection) ? consecutiveCount + 1 : 1;
+    let consecutiveCount=1;
+    for(let i=Math.max(MOM_LENGTH,ROC_LENGTH);i<closeArr.length;i++){
+        const mom=normalizedMomentum(closeArr,i);
+        const roc=normalizedROC(closeArr,i);
+        const dir=closeArr[i]>closeArr[i-1]? 'Bull':'Bear';
+        const prevDir=closeArr[i-1]>closeArr[i-2]? 'Bull':'Bear';
+        consecutiveCount=(dir===prevDir)? consecutiveCount+1:1;
 
-    if (consecutiveCount >= MIN_CONSECUTIVE) {
-      results.push({
-        index: i,
-        direction: direction,
-        momentumNorm: momNorm.toFixed(1),
-        momentumLevel: momentumLevel(momNorm),
-        rocNorm: rocNorm.toFixed(1),
-        rocLevel: rocLevel(rocNorm),
-        consecutive: consecutiveCount
-      });
+        if(consecutiveCount>=MIN_CONSECUTIVE){
+            const momBin=BINS.reduce((p,c)=>Math.abs(c-mom)<Math.abs(p-mom)?c:p,BINS[0]);
+            const rocBin=BINS.reduce((p,c)=>Math.abs(c-roc)<Math.abs(p-roc)?c:p,BINS[0]);
+            if(dir==='Bull') heatmapBull[momBin][rocBin]++;
+            else heatmapBear[momBin][rocBin]++;
+        }
     }
-  }
-  return results;
+    return {heatmapBull, heatmapBear};
 }
 
-// ================= DISPLAY RESULTS =================
-function displayResults(results) {
-  const tbody = document.querySelector("#results tbody");
-  tbody.innerHTML = '';
-  results.forEach(r => {
-    const tr = document.createElement("tr");
-    tr.className = r.direction.toLowerCase();
-    tr.innerHTML = `
-      <td>${r.index}</td>
-      <td>${r.direction}</td>
-      <td>${r.momentumNorm}</td>
-      <td>${r.momentumLevel}</td>
-      <td>${r.rocNorm}</td>
-      <td>${r.rocLevel}</td>
-      <td>${r.consecutive}</td>
-    `;
-    tbody.appendChild(tr);
-  });
+// ----------------- Render Heatmap -----------------
+function renderHeatmap(heatmapBull, heatmapBear){
+    const table = document.querySelector("#heatmap");
+    const headerRow = table.querySelector("thead tr");
+    headerRow.innerHTML='<th>Momentum \\ ROC</th>';
+    BINS.forEach(rBin=>headerRow.innerHTML+=`<th>${rBin} to ${rBin+BIN_SIZE}</th>`);
+
+    const tbody=table.querySelector("tbody");
+    tbody.innerHTML='';
+
+    BINS.forEach(mBin=>{
+        const tr=document.createElement("tr");
+        tr.innerHTML=`<td>${mBin} to ${mBin+BIN_SIZE}</td>`;
+        BINS.forEach(rBin=>{
+            const valBull=heatmapBull[mBin][rBin];
+            const valBear=heatmapBear[mBin][rBin];
+            const valTotal=valBull+valBear;
+            const colorIntensity=Math.min(255,valTotal*20);
+            tr.innerHTML+=`<td style="background-color: rgb(${255-colorIntensity},${255},${255-colorIntensity})">${valTotal}</td>`;
+        });
+        tbody.appendChild(tr);
+    });
 }
 
-// ================= SUMMARY =================
-function generateSummary(results) {
-  const summary = {
-    Bull: { count: 0, maxConsec: 0, momSum: 0, rocSum: 0 },
-    Bear: { count: 0, maxConsec: 0, momSum: 0, rocSum: 0 }
-  };
-  const streaks = { Bull: [], Bear: [] };
-
-  results.forEach(r => {
-    const dir = r.direction;
-    const lastStreak = streaks[dir].length ? streaks[dir][streaks[dir].length - 1] : null;
-
-    if (lastStreak && r.consecutive === lastStreak.consecutive + 1) {
-      lastStreak.momSum += parseFloat(r.momentumNorm);
-      lastStreak.rocSum += parseFloat(r.rocNorm);
-      lastStreak.consecutive = r.consecutive;
-    } else {
-      streaks[dir].push({
-        consecutive: r.consecutive,
-        momSum: parseFloat(r.momentumNorm),
-        rocSum: parseFloat(r.rocNorm)
-      });
-    }
-  });
-
-  ['Bull','Bear'].forEach(dir => {
-    const s = streaks[dir];
-    if (s.length === 0) return;
-    summary[dir].count = s.length;
-    summary[dir].maxConsec = Math.max(...s.map(x => x.consecutive));
-    const totalMom = s.reduce((a,b) => a + b.momSum, 0);
-    const totalROC = s.reduce((a,b) => a + b.rocSum, 0);
-    summary[dir].momAvg = (totalMom / s.length).toFixed(1);
-    summary[dir].rocAvg = (totalROC / s.length).toFixed(1);
-  });
-
-  const tbody = document.querySelector("#summary tbody");
-  tbody.innerHTML = '';
-  ['Bull','Bear'].forEach(dir => {
-    const s = summary[dir];
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${dir}</td>
-      <td>${s.count}</td>
-      <td>${s.maxConsec}</td>
-      <td>${s.momAvg || 0}</td>
-      <td>${s.rocAvg || 0}</td>
-    `;
-    tbody.appendChild(tr);
-  });
+// ----------------- Find Top Zones -----------------
+function getTopZones(heatmap, direction){
+    const zones=[];
+    BINS.forEach(m=>BINS.forEach(r=>{
+        const freq=heatmap[m][r];
+        if(freq>0) zones.push({momentum:m, roc:r, freq});
+    }));
+    zones.sort((a,b)=>b.freq-a.freq);
+    return zones.slice(0,3).map(z=>({...z,direction}));
 }
 
-// ================= RUN SCRIPT =================
-async function main() {
-  const candles = await fetchData();
-  if(candles.length === 0) { alert("No data fetched!"); return; }
-  const analysis = analyzeCandles(candles);
-  displayResults(analysis);
-  generateSummary(analysis);
+// ----------------- Render Top Zones -----------------
+function renderTopZones(topBull, topBear){
+    const tbody=document.querySelector("#topzones tbody");
+    tbody.innerHTML='';
+    [...topBull,...topBear].forEach(z=>{
+        const tr=document.createElement("tr");
+        tr.innerHTML=`<td>${z.direction}</td><td>${z.momentum} to ${z.momentum+BIN_SIZE}</td><td>${z.roc} to ${z.roc+BIN_SIZE}</td><td>${z.freq}</td>`;
+        tbody.appendChild(tr);
+    });
 }
 
+// ----------------- Main -----------------
+async function main(){
+    const candles=await fetchCandles();
+    if(candles.length===0){ alert("No data fetched!"); return; }
+    const {heatmapBull, heatmapBear}=analyzeHeatmap(candles);
+    renderHeatmap(heatmapBull, heatmapBear);
+    const topBull=getTopZones(heatmapBull,'Bull');
+    const topBear=getTopZones(heatmapBear,'Bear');
+    renderTopZones(topBull, topBear);
+}
+
+document.getElementById('symbol').innerText=SYMBOL;
+document.getElementById('interval').innerText=INTERVAL;
 main();
 </script>
 </body>
