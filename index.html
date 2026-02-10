@@ -2,159 +2,162 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EUUSD 5-min Streaks & Indicators</title>
+<title>Streak Indicator Analysis</title>
 <style>
   body { font-family: Arial, sans-serif; margin: 20px; }
-  #progressContainer { width: 100%; background: #eee; border-radius: 5px; overflow: hidden; margin-bottom: 20px; }
-  #progressBar { width: 0%; height: 25px; background: #4caf50; text-align: center; color: white; line-height: 25px; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #ccc; padding: 5px; text-align: center; }
-  th { background: #f4f4f4; }
+  #progressContainer { width: 100%; background: #ddd; margin-bottom: 20px; }
+  #progressBar { width: 0%; height: 25px; background: #4CAF50; text-align: center; color: white; }
+  table, th, td { border: 1px solid black; border-collapse: collapse; padding: 5px; }
+  th { background: #f2f2f2; }
 </style>
 </head>
 <body>
 
-<h2>EUUSD 5-min Streaks & Normalized Indicators</h2>
+<h2>EUR/USD 5-Min Candle Streak Analysis</h2>
 
 <div id="progressContainer">
   <div id="progressBar">0%</div>
 </div>
 
-<table id="streakTable">
+<table id="resultTable">
   <thead>
     <tr>
-      <th>Time</th>
-      <th>Direction</th>
-      <th>Streak</th>
-      <th>AO %</th>
-      <th>ROC %</th>
-      <th>MACD Histogram %</th>
-      <th>MOM %</th>
+      <th>Streak Type</th>
+      <th>Start Time</th>
+      <th>Length</th>
+      <th>AO%</th>
+      <th>ROC%</th>
+      <th>MACD Hist%</th>
+      <th>MOM%</th>
     </tr>
   </thead>
   <tbody></tbody>
 </table>
 
 <script>
-const API_LIMIT = 8; // max requests per minute
-const FETCH_INTERVAL = 7500; // 60,000 / 8 ~ 7.5 seconds per request
+const API_KEY = 'YOUR_TWELVE_DATA_API_KEY'; // <-- Enter your API key here
+const SYMBOL = 'EUR/USD';
+const INTERVAL = '5min';
+const MAX_REQUESTS_PER_MINUTE = 8;
 
-// Placeholder function to simulate API call to Twelve Data
-async function fetchCandleData(start, end) {
-    // Replace this with actual Twelve Data fetch code
-    // Example endpoint: `https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=5min&outputsize=500&apikey=YOUR_API_KEY`
-    return new Promise(resolve => {
-        setTimeout(() => {
-            // Simulate 10 candles
-            const data = [];
-            let price = 1.08;
-            for (let i = 0; i < 10; i++) {
-                price += (Math.random() - 0.5) * 0.002;
-                data.push({
-                    datetime: new Date(start.getTime() + i*5*60000).toISOString(),
-                    close: price,
-                    ao: Math.random() * 2 - 1,       // -1 to 1
-                    roc: Math.random() * 2 - 1,
-                    macd_hist: Math.random() * 2 - 1,
-                    mom: Math.random() * 2 - 1
-                });
-            }
-            resolve(data);
-        }, 500);
+async function fetchCandleData() {
+    const outputsize = 500;
+    const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=${outputsize}&apikey=${API_KEY}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    if (data.values) return data.values.reverse(); // oldest → newest
+    throw new Error('API Error or empty data');
+}
+
+// Utility: Calculate indicators from OHLC
+function calculateIndicators(candles) {
+    const results = candles.map((c, i) => {
+        const close = parseFloat(c.close);
+        const open = parseFloat(c.open);
+        // AO: SMA(5) - SMA(34) on (High+Low)/2
+        let ao = 0;
+        if (i >= 34) {
+            const sma5 = average(candles.slice(i-5+1,i+1).map(x => (parseFloat(x.high)+parseFloat(x.low))/2));
+            const sma34 = average(candles.slice(i-34+1,i+1).map(x => (parseFloat(x.high)+parseFloat(x.low))/2));
+            ao = sma5 - sma34;
+        }
+        // ROC: Rate of Change
+        let roc = 0;
+        if (i >= 1) roc = ((close - parseFloat(candles[i-1].close)) / parseFloat(candles[i-1].close)) * 100;
+        // MACD Histogram approximation: EMA12-EMA26 for simplicity
+        let macdHist = 0;
+        if (i >= 26) {
+            const ema12 = ema(candles.slice(i-12+1,i+1).map(x => parseFloat(x.close)));
+            const ema26 = ema(candles.slice(i-26+1,i+1).map(x => parseFloat(x.close)));
+            macdHist = ema12 - ema26;
+        }
+        // MOM: close - close[n-1]
+        let mom = 0;
+        if (i >= 1) mom = close - parseFloat(candles[i-1].close);
+        return { datetime: c.datetime, close, ao, roc, macdHist, mom, direction: close > open ? 'Bull' : 'Bear' };
     });
+    return results;
 }
 
-// Normalize indicator to 0-100% scale
-function normalize(value, min, max) {
-    if (max === min) return 50;
-    return ((value - min) / (max - min)) * 100;
+// Helpers
+function average(arr) { return arr.reduce((a,b)=>a+b,0)/arr.length; }
+function ema(values) {
+    const k = 2 / (values.length + 1);
+    return values.reduce((prev,curr,i) => i===0 ? curr : curr*k + prev*(1-k));
+}
+function normalizeToPercent(arr) {
+    const min = Math.min(...arr);
+    const max = Math.max(...arr);
+    return arr.map(v => ((v - min) / (max - min))*100);
 }
 
-// Detect streaks of 3+ consecutive candles in one direction
-function detectStreaks(candles) {
+// Track streaks >=3
+function detectStreaks(data) {
     const streaks = [];
-    let currentStreak = [];
-    for (let i = 0; i < candles.length; i++) {
-        const dir = i === 0 ? null : candles[i].close > candles[i-1].close ? 'Bull' : 'Bear';
-        if (currentStreak.length === 0 || currentStreak[0].direction === dir) {
-            currentStreak.push({ ...candles[i], direction: dir });
+    let current = null;
+    for (let i=0;i<data.length;i++) {
+        if (!current) {
+            current = { type: data[i].direction, startTime: data[i].datetime, length: 1, ao:[data[i].ao], roc:[data[i].roc], macd:[data[i].macdHist], mom:[data[i].mom] };
+        } else if (data[i].direction === current.type) {
+            current.length++;
+            current.ao.push(data[i].ao);
+            current.roc.push(data[i].roc);
+            current.macd.push(data[i].macdHist);
+            current.mom.push(data[i].mom);
         } else {
-            if (currentStreak.length >= 3) streaks.push([...currentStreak]);
-            currentStreak = [{ ...candles[i], direction: dir }];
+            if (current.length >= 3) streaks.push(current);
+            current = { type: data[i].direction, startTime: data[i].datetime, length:1, ao:[data[i].ao], roc:[data[i].roc], macd:[data[i].macdHist], mom:[data[i].mom] };
         }
     }
-    if (currentStreak.length >= 3) streaks.push(currentStreak);
+    if (current && current.length >=3) streaks.push(current);
     return streaks;
 }
 
-// Update HTML table
+// Update table and loading
 function updateTable(streaks) {
-    const tbody = document.querySelector('#streakTable tbody');
+    const tbody = document.querySelector('#resultTable tbody');
     tbody.innerHTML = '';
-    streaks.forEach(streak => {
-        streak.forEach(c => {
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${c.datetime}</td>
-                <td>${c.direction}</td>
-                <td>${streak.length}</td>
-                <td>${c.ao.toFixed(1)}</td>
-                <td>${c.roc.toFixed(1)}</td>
-                <td>${c.macd_hist.toFixed(1)}</td>
-                <td>${c.mom.toFixed(1)}</td>
-            `;
-            tbody.appendChild(row);
-        });
+    streaks.forEach(s => {
+        const aoPercent = normalizeToPercent(s.ao).reduce((a,b)=>a+b,0)/s.ao.length;
+        const rocPercent = normalizeToPercent(s.roc).reduce((a,b)=>a+b,0)/s.roc.length;
+        const macdPercent = normalizeToPercent(s.macd).reduce((a,b)=>a+b,0)/s.macd.length;
+        const momPercent = normalizeToPercent(s.mom).reduce((a,b)=>a+b,0)/s.mom.length;
+        const row = document.createElement('tr');
+        row.innerHTML = `<td>${s.type}</td><td>${s.startTime}</td><td>${s.length}</td>
+            <td>${aoPercent.toFixed(1)}</td>
+            <td>${rocPercent.toFixed(1)}</td>
+            <td>${macdPercent.toFixed(1)}</td>
+            <td>${momPercent.toFixed(1)}</td>`;
+        tbody.appendChild(row);
     });
 }
 
-// Update progress bar
-function updateProgress(percent) {
+// Loading bar
+function updateProgress(p) {
     const bar = document.getElementById('progressBar');
-    bar.style.width = percent + '%';
-    bar.textContent = percent + '%';
+    bar.style.width = `${p}%`;
+    bar.textContent = `${p}%`;
 }
 
-// Main function
+// Main
 async function main() {
-    const start = new Date(Date.now() - 60*60*1000); // 1 hour ago
-    const end = new Date();
-
-    // Fetch data in batches respecting API limit
-    const totalRequests = 8; // max 8 per minute
-    let allCandles = [];
-    for (let i = 0; i < totalRequests; i++) {
-        const data = await fetchCandleData(start, end);
-        allCandles = allCandles.concat(data);
-        updateProgress(Math.round((i+1)/totalRequests*100));
-        await new Promise(res => setTimeout(res, FETCH_INTERVAL));
+    updateProgress(0);
+    try {
+        const candles = await fetchCandleData();
+        updateProgress(30);
+        const indicators = calculateIndicators(candles);
+        updateProgress(60);
+        const streaks = detectStreaks(indicators);
+        updateProgress(90);
+        updateTable(streaks);
+        updateProgress(100);
+    } catch(e) {
+        alert('Error fetching data: ' + e.message);
     }
-
-    // Calculate min/max for normalization
-    const indicators = ['ao', 'roc', 'macd_hist', 'mom'];
-    const mins = {}, maxs = {};
-    indicators.forEach(ind => {
-        mins[ind] = Math.min(...allCandles.map(c => c[ind]));
-        maxs[ind] = Math.max(...allCandles.map(c => c[ind]));
-    });
-
-    // Normalize indicators
-    allCandles.forEach(c => {
-        indicators.forEach(ind => {
-            c[ind] = normalize(c[ind], mins[ind], maxs[ind]);
-        });
-    });
-
-    // Detect streaks
-    const streaks = detectStreaks(allCandles);
-
-    // Update table
-    updateTable(streaks);
-    updateProgress(100);
 }
 
 main();
 </script>
+
 </body>
 </html>
