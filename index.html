@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Forex Momentum + ROC Streak Heatmap</title>
+<title>Forex Momentum + ROC Streak Analysis</title>
 <style>
   body { font-family: Arial, sans-serif; margin: 20px; }
   table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: 12px; }
@@ -12,12 +12,12 @@
 </style>
 </head>
 <body>
-<h1>Forex Momentum + ROC Consecutive Candle Heatmap</h1>
+<h1>Forex Momentum + ROC Streak Analysis</h1>
 <p>Symbol: <strong id="symbol">EUR/USD</strong></p>
 <p>Interval: <strong id="interval">5min</strong></p>
 
 <h2>Heatmap: Frequency of Consecutive Candles</h2>
-<p>Higher numbers = more consistent streaks</p>
+<p>Higher numbers = more streaks start in this zone</p>
 <table id="heatmap">
   <thead>
     <tr>
@@ -29,27 +29,27 @@
 </table>
 
 <h2>Top Zones</h2>
+<p>Shows both: most frequent streaks & longest streaks</p>
 <table id="topzones">
   <thead>
     <tr>
       <th>Direction</th>
       <th>Momentum Bin</th>
       <th>ROC Bin</th>
-      <th>Frequency</th>
+      <th>Streak Count</th>
+      <th>Longest Streak</th>
     </tr>
   </thead>
   <tbody></tbody>
 </table>
 
 <script>
-const API_KEY = 'f6e69ff791404a24b736a913676eca5e'; // Replace with your key
+const API_KEY = 'YOUR_TWELVE_DATA_KEY'; // Replace with your key
 const SYMBOL = 'EUR/USD';
 const INTERVAL = '5min';
 const MOM_LENGTH = 10;
 const ROC_LENGTH = 14;
 const MIN_CONSECUTIVE = 2;
-
-// Bins for heatmap
 const BIN_SIZE = 20; 
 const BINS = [];
 for(let i=-100;i<100;i+=BIN_SIZE) BINS.push(i);
@@ -94,7 +94,16 @@ async function fetchCandles(){
 function analyzeHeatmap(candles){
     const closeArr = candles.map(c=>parseFloat(c.close));
     const heatmapBull={}, heatmapBear={};
-    BINS.forEach(m=>{heatmapBull[m]={}; heatmapBear[m]={}; BINS.forEach(r=>{heatmapBull[m][r]=0; heatmapBear[m][r]=0;})});
+    const streaksBull={}, streaksBear={};
+
+    BINS.forEach(m=>{
+        heatmapBull[m]={}; heatmapBear[m]={};
+        streaksBull[m]={}; streaksBear[m]={};
+        BINS.forEach(r=>{
+            heatmapBull[m][r]=0; heatmapBear[m][r]=0;
+            streaksBull[m][r]=[]; streaksBear[m][r]=[];
+        });
+    });
 
     let consecutiveCount=1;
     for(let i=Math.max(MOM_LENGTH,ROC_LENGTH);i<closeArr.length;i++){
@@ -107,11 +116,16 @@ function analyzeHeatmap(candles){
         if(consecutiveCount>=MIN_CONSECUTIVE){
             const momBin=BINS.reduce((p,c)=>Math.abs(c-mom)<Math.abs(p-mom)?c:p,BINS[0]);
             const rocBin=BINS.reduce((p,c)=>Math.abs(c-roc)<Math.abs(p-roc)?c:p,BINS[0]);
-            if(dir==='Bull') heatmapBull[momBin][rocBin]++;
-            else heatmapBear[momBin][rocBin]++;
+            if(dir==='Bull'){
+                heatmapBull[momBin][rocBin]++;
+                streaksBull[momBin][rocBin].push(consecutiveCount);
+            } else {
+                heatmapBear[momBin][rocBin]++;
+                streaksBear[momBin][rocBin].push(consecutiveCount);
+            }
         }
     }
-    return {heatmapBull, heatmapBear};
+    return {heatmapBull, heatmapBear, streaksBull, streaksBear};
 }
 
 // ----------------- Render Heatmap -----------------
@@ -139,23 +153,45 @@ function renderHeatmap(heatmapBull, heatmapBear){
 }
 
 // ----------------- Find Top Zones -----------------
-function getTopZones(heatmap, direction){
+function getTopZones(heatmap, streaks, direction, type='count'){
     const zones=[];
     BINS.forEach(m=>BINS.forEach(r=>{
         const freq=heatmap[m][r];
-        if(freq>0) zones.push({momentum:m, roc:r, freq});
+        if(freq>0){
+            let value;
+            if(type==='count') value=freq; // most streaks
+            else value=Math.max(...streaks[m][r]); // longest streak
+            zones.push({momentum:m, roc:r, freq:freq, longest:Math.max(...streaks[m][r]), value});
+        }
     }));
-    zones.sort((a,b)=>b.freq-a.freq);
+    zones.sort((a,b)=>b.value-a.value);
     return zones.slice(0,3).map(z=>({...z,direction}));
 }
 
 // ----------------- Render Top Zones -----------------
-function renderTopZones(topBull, topBear){
+function renderTopZones(topBullCount, topBearCount, topBullLongest, topBearLongest){
     const tbody=document.querySelector("#topzones tbody");
     tbody.innerHTML='';
-    [...topBull,...topBear].forEach(z=>{
+
+    // Most streaks
+    [...topBullCount,...topBearCount].forEach(z=>{
         const tr=document.createElement("tr");
-        tr.innerHTML=`<td>${z.direction}</td><td>${z.momentum} to ${z.momentum+BIN_SIZE}</td><td>${z.roc} to ${z.roc+BIN_SIZE}</td><td>${z.freq}</td>`;
+        tr.innerHTML=`<td>${z.direction} (Most Streaks)</td>
+                        <td>${z.momentum} to ${z.momentum+BIN_SIZE}</td>
+                        <td>${z.roc} to ${z.roc+BIN_SIZE}</td>
+                        <td>${z.freq}</td>
+                        <td>${z.longest}</td>`;
+        tbody.appendChild(tr);
+    });
+
+    // Longest streaks
+    [...topBullLongest,...topBearLongest].forEach(z=>{
+        const tr=document.createElement("tr");
+        tr.innerHTML=`<td>${z.direction} (Longest Streaks)</td>
+                        <td>${z.momentum} to ${z.momentum+BIN_SIZE}</td>
+                        <td>${z.roc} to ${z.roc+BIN_SIZE}</td>
+                        <td>${z.freq}</td>
+                        <td>${z.longest}</td>`;
         tbody.appendChild(tr);
     });
 }
@@ -164,11 +200,15 @@ function renderTopZones(topBull, topBear){
 async function main(){
     const candles=await fetchCandles();
     if(candles.length===0){ alert("No data fetched!"); return; }
-    const {heatmapBull, heatmapBear}=analyzeHeatmap(candles);
+    const {heatmapBull, heatmapBear, streaksBull, streaksBear}=analyzeHeatmap(candles);
     renderHeatmap(heatmapBull, heatmapBear);
-    const topBull=getTopZones(heatmapBull,'Bull');
-    const topBear=getTopZones(heatmapBear,'Bear');
-    renderTopZones(topBull, topBear);
+
+    const topBullCount=getTopZones(heatmapBull, streaksBull,'Bull','count');
+    const topBearCount=getTopZones(heatmapBear, streaksBear,'Bear','count');
+    const topBullLongest=getTopZones(heatmapBull, streaksBull,'Bull','longest');
+    const topBearLongest=getTopZones(heatmapBear, streaksBear,'Bear','longest');
+
+    renderTopZones(topBullCount, topBearCount, topBullLongest, topBearLongest);
 }
 
 document.getElementById('symbol').innerText=SYMBOL;
