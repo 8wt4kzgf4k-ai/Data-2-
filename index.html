@@ -2,188 +2,151 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>USDCHF M1 Candle Streak Backtest</title>
+<title>USDCHF Last 1000 M1 Candles with Indicators</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
 body { background:#0f172a; color:#e5e7eb; font-family:Arial, sans-serif; text-align:center; }
 h1 { color:#38bdf8; }
-table { margin:auto; border-collapse:collapse; width:95%; max-width:1200px; }
-th, td { border:1px solid #334155; padding:6px; font-size:13px; }
-th { background:#1e293b; }
-button { margin:10px; padding:10px 15px; background:#38bdf8; color:#0f172a; border:none; border-radius:5px; cursor:pointer; font-weight:bold; }
+button { margin:20px; padding:10px 15px; background:#38bdf8; color:#0f172a; border:none; border-radius:5px; cursor:pointer; font-weight:bold; }
 button:hover { background:#0ea5e9; }
-.stats { margin:20px auto; width:95%; max-width:900px; background:#1e293b; padding:10px; border-radius:10px; text-align:left; }
 #loadingBarContainer { width:80%; background:#1e293b; border-radius:10px; margin:20px auto; height:25px; }
 #loadingBar { width:0%; height:100%; background:#38bdf8; border-radius:10px; text-align:center; color:#0f172a; line-height:25px; font-weight:bold; }
 </style>
 </head>
 <body>
 
-<h1>📊 USDCHF 1-Minute Candle Streak Backtest</h1>
-<p>Backtest for 3+ consecutive 1-minute candles (last 1000 candles)</p>
-
+<h1>📊 USDCHF Last 1000 1-Minute Candles with Indicators</h1>
 <div id="loadingBarContainer">
   <div id="loadingBar">0%</div>
 </div>
-
 <button onclick="downloadCSV()">Download CSV</button>
-
-<table id="logTable">
-<tr>
-<th>Time</th><th>Timeframe</th><th>Direction</th><th>Streak</th>
-<th>RSI</th><th>Momentum</th><th>Williams %R</th>
-<th>BodySize</th><th>ATR</th><th>Session</th><th>Gap</th>
-</tr>
-</table>
-
-<div class="stats" id="stats">
-<h3>Streak Statistics</h3>
-<p id="statText">Calculating...</p>
-</div>
 
 <script>
 const API_KEY = "b3f898dec7014a23aeddd60f2cb30fc6";
 const SYMBOL = "USD/CHF";
-const TIMEFRAMES = ["1min"]; // only 1-minute candles
-const TF_LABELS = { "1min":"1 Minute" };
-const TOTAL_CANDLES = 1000; // reduced to 1000
-const CHUNK_SIZE = 200;      // 200 candles per request
-const REQUEST_DELAY = 1000;  // 1 second delay to avoid rate limits
+const TOTAL_CANDLES = 1000;
+const CHUNK_SIZE = 200; 
+const REQUEST_DELAY = 1000; 
 
-let loggedTimes = new Set();
-let csvData = [["Time","Timeframe","Direction","Streak","RSI","Momentum","WilliamsR","BodySize","ATR","Session","Gap"]];
-let totalChunks = TIMEFRAMES.length * Math.ceil(TOTAL_CANDLES / CHUNK_SIZE);
-let completedChunks = 0;
+let csvData = [["Datetime","Open","High","Low","Close","Volume","RSI14","Momentum10","Williams%R14","ATR14"]];
 
-// Loading bar
-function updateLoadingBar() {
-  const percent = Math.floor((completedChunks / totalChunks) * 100);
-  const bar = document.getElementById("loadingBar");
-  bar.style.width = percent + "%";
-  bar.innerText = percent + "%";
+// Update loading bar
+function updateLoadingBar(percent){
+    const bar = document.getElementById("loadingBar");
+    bar.style.width = percent + "%";
+    bar.innerText = percent + "%";
 }
 
 // Delay helper
-function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-
-// Market session helper
-function getSession(hour){
-  if(hour>=0 && hour<8) return "Asia";
-  else if(hour>=8 && hour<16) return "London";
-  else return "NY";
-}
-
-// Fetch candles in chunks
-async function getCandles(interval, total, chunkSize){
-  let allCandles = [];
-  let remaining = total;
-  let startDate = null;
-
-  while(remaining>0){
-    let url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${interval}&outputsize=${Math.min(chunkSize,remaining)}&apikey=${API_KEY}`;
-    if(startDate) url += `&start_date=${startDate}`;
-    try{
-      const res = await fetch(url);
-      const data = await res.json();
-      if(!data.values || data.values.length===0){
-        console.error("No data from API:", data);
-        break;
-      }
-      let chunk = data.values.reverse();
-      allCandles = chunk.concat(allCandles);
-      remaining -= chunk.length;
-      startDate = chunk[0].datetime;
-      completedChunks++;
-      updateLoadingBar();
-      await delay(REQUEST_DELAY);
-      if(chunk.length < chunkSize) break;
-    } catch(e){
-      console.error("Fetch error:", e);
-      break;
-    }
-  }
-  return allCandles;
-}
+function delay(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
 
 // Indicators
-function rsi(closes, period=14){ let gains=0, losses=0; for(let i=1;i<=period;i++){ let diff=closes[i]-closes[i-1]; if(diff>0) gains+=diff; else losses-=diff; } let rs=gains/(losses||1); return 100-(100/(1+rs)); }
-function momentum(closes, period=10){ return closes[closes.length-1]-closes[closes.length-1-period]; }
-function williamsR(highs,lows,closes,period=14){ let hh=Math.max(...highs.slice(-period)); let ll=Math.min(...lows.slice(-period)); return ((hh-closes[closes.length-1])/(hh-ll))*-100; }
-function atr(highs,lows,closes,period=14){ let trs=[]; for(let i=1;i<highs.length;i++){ let tr=Math.max(highs[i]-lows[i], Math.abs(highs[i]-closes[i-1]), Math.abs(lows[i]-closes[i-1])); trs.push(tr); } return trs.slice(-period).reduce((a,b)=>a+b,0)/period; }
-
-// Log streak
-function logRow(time,tf,dir,streak,rsiV,momV,willV,body,atrV,session,gap){
-  const key=tf+"_"+time;
-  if(loggedTimes.has(key)) return;
-  loggedTimes.add(key);
-  const tfLabel = TF_LABELS[tf] || tf;
-  csvData.push([time,tfLabel,dir,streak,rsiV.toFixed(2),momV.toFixed(5),willV.toFixed(2),body.toFixed(5),atrV.toFixed(5),session,gap.toFixed(5)]);
-
-  const table=document.getElementById("logTable");
-  const row=table.insertRow(1);
-  [time,tfLabel,dir,streak,rsiV.toFixed(2),momV.toFixed(5),willV.toFixed(2),body.toFixed(5),atrV.toFixed(5),session,gap.toFixed(5)].forEach((v,i)=>row.insertCell(i).innerText=v);
-}
-
-// CSV download
-function downloadCSV(){
-  let csvContent = "data:text/csv;charset=utf-8," + csvData.map(e=>e.join(",")).join("\n");
-  const encodedUri = encodeURI(csvContent);
-  const link = document.createElement("a");
-  link.setAttribute("href", encodedUri);
-  link.setAttribute("download","USDCHF_M1_streak_backtest.csv");
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
-// Update stats
-function updateStats(){
-  let statsText = "";
-  const rows = csvData.slice(1);
-  let n=rows.length, up=0, down=0, rsiSum=0, momSum=0, bodySum=0;
-  rows.forEach(r=>{ if(r[2]==="UP") up++; else down++; rsiSum+=parseFloat(r[4]); momSum+=parseFloat(r[5]); bodySum+=parseFloat(r[7]); });
-  if(n>0) statsText = `1 Minute: ${n} streaks (UP:${up}, DOWN:${down}), Avg RSI:${(rsiSum/n).toFixed(2)}, Avg Momentum:${(momSum/n).toFixed(5)}, Avg Body:${(bodySum/n).toFixed(5)}`;
-  document.getElementById("statText").innerHTML = statsText;
-}
-
-// Backtest logic
-async function runBacktest(){
-  for(const tf of TIMEFRAMES){
-    let candles = await getCandles(tf,TOTAL_CANDLES,CHUNK_SIZE);
-    if(!candles || candles.length<15) continue;
-    const closes=candles.map(c=>parseFloat(c.close));
-    const highs=candles.map(c=>parseFloat(c.high));
-    const lows=candles.map(c=>parseFloat(c.low));
-    const opens=candles.map(c=>parseFloat(c.open));
-
-    for(let i=2;i<candles.length;i++){
-      let streak=1; let dir=null;
-      for(let j=i;j>0;j--){
-        let c=candles[j], p=candles[j-1];
-        if(c.close>c.open && p.close>p.open){ if(dir===null) dir="UP"; if(dir==="UP") streak++; else break; }
-        else if(c.close<c.open && p.close<p.open){ if(dir===null) dir="DOWN"; if(dir==="DOWN") streak++; else break; }
-        else break;
-      }
-      if(streak>=3){
-        const r=rsi(closes.slice(i-streak+1,i+1));
-        const m=momentum(closes.slice(0,i+1));
-        const w=williamsR(highs.slice(0,i+1),lows.slice(0,i+1),closes.slice(0,i+1));
-        const b=Math.abs(candles[i].close-candles[i].open);
-        const a=atr(highs.slice(0,i+1),lows.slice(0,i+1),closes.slice(0,i+1));
-        const lastTime=new Date(candles[i].datetime);
-        const session=getSession(lastTime.getUTCHours());
-        const gap=candles[i].open-candles[i-1].close;
-        logRow(candles[i].datetime,tf,dir,streak,r,m,w,b,a,session,gap);
-        i=i-streak+1;
-      }
+function rsi(closes, period=14){
+    let gains=0, losses=0;
+    for(let i=closes.length-period;i<closes.length-1;i++){
+        const diff = closes[i+1]-closes[i];
+        if(diff>0) gains+=diff; else losses-=diff;
     }
-  }
-  updateStats();
-  completedChunks = totalChunks;
-  updateLoadingBar();
+    const rs = gains/(losses||1);
+    return 100-(100/(1+rs));
 }
 
-runBacktest();
+function momentum(closes, period=10){
+    if(closes.length <= period) return 0;
+    return closes[closes.length-1] - closes[closes.length-1-period];
+}
+
+function williamsR(highs,lows,closes,period=14){
+    if(closes.length<period) return 0;
+    const hh = Math.max(...highs.slice(-period));
+    const ll = Math.min(...lows.slice(-period));
+    return ((hh - closes[closes.length-1])/(hh-ll))*-100;
+}
+
+function atr(highs,lows,closes,period=14){
+    if(closes.length<period) return 0;
+    let trs = [];
+    for(let i=1;i<highs.length;i++){
+        let tr = Math.max(
+            highs[i]-lows[i],
+            Math.abs(highs[i]-closes[i-1]),
+            Math.abs(lows[i]-closes[i-1])
+        );
+        trs.push(tr);
+    }
+    return trs.slice(-period).reduce((a,b)=>a+b,0)/period;
+}
+
+// Fetch last 1000 candles
+async function getCandles(total, chunkSize){
+    let allCandles = [];
+    let remaining = total;
+    let startDate = null;
+    let chunksCompleted = 0;
+    let totalChunks = Math.ceil(total / chunkSize);
+
+    while(remaining > 0){
+        let url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=1min&outputsize=${Math.min(chunkSize,remaining)}&apikey=${API_KEY}`;
+        if(startDate) url += `&start_date=${startDate}`;
+        try{
+            const res = await fetch(url);
+            const data = await res.json();
+            if(!data.values || data.values.length === 0){ console.error("No data from API:", data); break; }
+            let chunk = data.values.reverse();
+            allCandles = chunk.concat(allCandles);
+            remaining -= chunk.length;
+            startDate = chunk[0].datetime;
+            chunksCompleted++;
+            updateLoadingBar(Math.floor((chunksCompleted/totalChunks)*90)); // up to 90% during fetch
+            await delay(REQUEST_DELAY);
+            if(chunk.length < chunkSize) break;
+        } catch(e){ console.error("Fetch error:", e); break; }
+    }
+    return allCandles;
+}
+
+// Prepare CSV download
+function downloadCSV(){
+    let csvContent = "data:text/csv;charset=utf-8," + csvData.map(e => e.join(",")).join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "USDCHF_1min_last1000_indicators.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+
+// Main function
+async function run(){
+    const candles = await getCandles(TOTAL_CANDLES, CHUNK_SIZE);
+    if(!candles || candles.length===0){ alert("No data fetched"); return; }
+
+    const closes = candles.map(c => parseFloat(c.close));
+    const highs = candles.map(c => parseFloat(c.high));
+    const lows = candles.map(c => parseFloat(c.low));
+
+    for(let i=0;i<candles.length;i++){
+        const c = candles[i];
+        const open = parseFloat(c.open);
+        const high = parseFloat(c.high);
+        const low = parseFloat(c.low);
+        const close = parseFloat(c.close);
+        const volume = parseFloat(c.volume);
+
+        const rsi14 = i>=14 ? rsi(closes.slice(i-14+1,i+1),14) : 0;
+        const mom10 = i>=10 ? momentum(closes.slice(i-10+1,i+1),10) : 0;
+        const will14 = i>=14 ? williamsR(highs.slice(i-14+1,i+1), lows.slice(i-14+1,i+1), closes.slice(i-14+1,i+1),14) : 0;
+        const atr14 = i>=14 ? atr(highs.slice(i-14+1,i+1), lows.slice(i-14+1,i+1), closes.slice(i-14+1,i+1),14) : 0;
+
+        csvData.push([c.datetime, open, high, low, close, volume, rsi14.toFixed(2), mom10.toFixed(5), will14.toFixed(2), atr14.toFixed(5)]);
+    }
+
+    // Loading bar now 100% when data + indicators are ready
+    updateLoadingBar(100);
+}
+
+run();
 </script>
 </body>
 </html>
