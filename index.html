@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Advanced Forex Streak Backtest</title>
+<title>USDCHF M1 Candle Streak Backtest</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
 body { background:#0f172a; color:#e5e7eb; font-family:Arial, sans-serif; text-align:center; }
@@ -19,8 +19,8 @@ button:hover { background:#0ea5e9; }
 </head>
 <body>
 
-<h1>📊 Advanced USDCHF Streak Backtest</h1>
-<p>Backtest for 3+ consecutive candles across 1 Minute, 3 Minute, 5 Minute candles</p>
+<h1>📊 USDCHF 1-Minute Candle Streak Backtest</h1>
+<p>Backtest for 3+ consecutive 1-minute candles (last 1000 candles)</p>
 
 <div id="loadingBarContainer">
   <div id="loadingBar">0%</div>
@@ -44,10 +44,10 @@ button:hover { background:#0ea5e9; }
 <script>
 const API_KEY = "b3f898dec7014a23aeddd60f2cb30fc6";
 const SYMBOL = "USD/CHF";
-const TIMEFRAMES = ["1min","3min","5min"];
-const TF_LABELS = { "1min":"1 Minute", "3min":"3 Minute", "5min":"5 Minute" };
-const TOTAL_CANDLES = 2000;  // reduced from 5000
-const CHUNK_SIZE = 200;      // reduced from 1000
+const TIMEFRAMES = ["1min"]; // only 1-minute candles
+const TF_LABELS = { "1min":"1 Minute" };
+const TOTAL_CANDLES = 1000; // reduced to 1000
+const CHUNK_SIZE = 200;      // 200 candles per request
 const REQUEST_DELAY = 1000;  // 1 second delay to avoid rate limits
 
 let loggedTimes = new Set();
@@ -55,28 +55,32 @@ let csvData = [["Time","Timeframe","Direction","Streak","RSI","Momentum","Willia
 let totalChunks = TIMEFRAMES.length * Math.ceil(TOTAL_CANDLES / CHUNK_SIZE);
 let completedChunks = 0;
 
+// Loading bar
 function updateLoadingBar() {
-  const percent = Math.floor((completedChunks/totalChunks)*100);
+  const percent = Math.floor((completedChunks / totalChunks) * 100);
   const bar = document.getElementById("loadingBar");
   bar.style.width = percent + "%";
   bar.innerText = percent + "%";
 }
 
-function delay(ms){ return new Promise(resolve=>setTimeout(resolve, ms)); }
+// Delay helper
+function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
+// Market session helper
 function getSession(hour){
   if(hour>=0 && hour<8) return "Asia";
   else if(hour>=8 && hour<16) return "London";
   else return "NY";
 }
 
+// Fetch candles in chunks
 async function getCandles(interval, total, chunkSize){
-  let allCandles=[];
-  let remaining=total;
-  let startDate=null;
+  let allCandles = [];
+  let remaining = total;
+  let startDate = null;
 
   while(remaining>0){
-    let url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${interval}&outputsize=${Math.min(chunkSize, remaining)}&apikey=${API_KEY}`;
+    let url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${interval}&outputsize=${Math.min(chunkSize,remaining)}&apikey=${API_KEY}`;
     if(startDate) url += `&start_date=${startDate}`;
     try{
       const res = await fetch(url);
@@ -92,7 +96,7 @@ async function getCandles(interval, total, chunkSize){
       completedChunks++;
       updateLoadingBar();
       await delay(REQUEST_DELAY);
-      if(chunk.length<chunkSize) break;
+      if(chunk.length < chunkSize) break;
     } catch(e){
       console.error("Fetch error:", e);
       break;
@@ -107,40 +111,42 @@ function momentum(closes, period=10){ return closes[closes.length-1]-closes[clos
 function williamsR(highs,lows,closes,period=14){ let hh=Math.max(...highs.slice(-period)); let ll=Math.min(...lows.slice(-period)); return ((hh-closes[closes.length-1])/(hh-ll))*-100; }
 function atr(highs,lows,closes,period=14){ let trs=[]; for(let i=1;i<highs.length;i++){ let tr=Math.max(highs[i]-lows[i], Math.abs(highs[i]-closes[i-1]), Math.abs(lows[i]-closes[i-1])); trs.push(tr); } return trs.slice(-period).reduce((a,b)=>a+b,0)/period; }
 
+// Log streak
 function logRow(time,tf,dir,streak,rsiV,momV,willV,body,atrV,session,gap){
   const key=tf+"_"+time;
   if(loggedTimes.has(key)) return;
   loggedTimes.add(key);
   const tfLabel = TF_LABELS[tf] || tf;
   csvData.push([time,tfLabel,dir,streak,rsiV.toFixed(2),momV.toFixed(5),willV.toFixed(2),body.toFixed(5),atrV.toFixed(5),session,gap.toFixed(5)]);
+
   const table=document.getElementById("logTable");
   const row=table.insertRow(1);
   [time,tfLabel,dir,streak,rsiV.toFixed(2),momV.toFixed(5),willV.toFixed(2),body.toFixed(5),atrV.toFixed(5),session,gap.toFixed(5)].forEach((v,i)=>row.insertCell(i).innerText=v);
 }
 
+// CSV download
 function downloadCSV(){
-  let csvContent="data:text/csv;charset=utf-8,"+csvData.map(e=>e.join(",")).join("\n");
+  let csvContent = "data:text/csv;charset=utf-8," + csvData.map(e=>e.join(",")).join("\n");
   const encodedUri = encodeURI(csvContent);
-  const link=document.createElement("a");
+  const link = document.createElement("a");
   link.setAttribute("href", encodedUri);
-  link.setAttribute("download","streak_backtest.csv");
+  link.setAttribute("download","USDCHF_M1_streak_backtest.csv");
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
 }
 
+// Update stats
 function updateStats(){
-  let statsText="";
-  for(const tf of TIMEFRAMES){
-    const tfLabel=TF_LABELS[tf];
-    const rows=csvData.slice(1).filter(r=>r[1]===tfLabel);
-    let n=rows.length, up=0, down=0, rsiSum=0, momSum=0, bodySum=0;
-    rows.forEach(r=>{ if(r[2]==="UP") up++; else down++; rsiSum+=parseFloat(r[4]); momSum+=parseFloat(r[5]); bodySum+=parseFloat(r[7]); });
-    if(n>0) statsText+=`${tfLabel}: ${n} streaks (UP:${up}, DOWN:${down}), Avg RSI:${(rsiSum/n).toFixed(2)}, Avg Momentum:${(momSum/n).toFixed(5)}, Avg Body:${(bodySum/n).toFixed(5)}<br>`;
-  }
-  document.getElementById("statText").innerHTML=statsText;
+  let statsText = "";
+  const rows = csvData.slice(1);
+  let n=rows.length, up=0, down=0, rsiSum=0, momSum=0, bodySum=0;
+  rows.forEach(r=>{ if(r[2]==="UP") up++; else down++; rsiSum+=parseFloat(r[4]); momSum+=parseFloat(r[5]); bodySum+=parseFloat(r[7]); });
+  if(n>0) statsText = `1 Minute: ${n} streaks (UP:${up}, DOWN:${down}), Avg RSI:${(rsiSum/n).toFixed(2)}, Avg Momentum:${(momSum/n).toFixed(5)}, Avg Body:${(bodySum/n).toFixed(5)}`;
+  document.getElementById("statText").innerHTML = statsText;
 }
 
+// Backtest logic
 async function runBacktest(){
   for(const tf of TIMEFRAMES){
     let candles = await getCandles(tf,TOTAL_CANDLES,CHUNK_SIZE);
@@ -173,7 +179,7 @@ async function runBacktest(){
     }
   }
   updateStats();
-  completedChunks=totalChunks;
+  completedChunks = totalChunks;
   updateLoadingBar();
 }
 
