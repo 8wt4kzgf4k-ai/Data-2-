@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>USDCHF Last 1000 M1 Candles with Indicators</title>
+<title>USDCHF M1 Candle Streak Analysis</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-body { background:#0f172a; color:#e5e7eb; font-family:Arial, sans-serif; text-align:center; }
-h1 { color:#38bdf8; }
-button { margin:20px; padding:10px 15px; background:#38bdf8; color:#0f172a; border:none; border-radius:5px; cursor:pointer; font-weight:bold; }
+body { background:#0f172a; color:#e5e7eb; font-family:Arial,sans-serif; text-align:center; }
+h1, h2 { color:#38bdf8; }
+button { margin:10px; padding:10px 15px; background:#38bdf8; color:#0f172a; border:none; border-radius:5px; cursor:pointer; font-weight:bold; }
 button:hover { background:#0ea5e9; }
 #loadingBarContainer { width:80%; background:#1e293b; border-radius:10px; margin:20px auto; height:25px; }
 #loadingBar { width:0%; height:100%; background:#38bdf8; border-radius:10px; text-align:center; color:#0f172a; line-height:25px; font-weight:bold; }
@@ -20,13 +20,15 @@ tbody tr:nth-child(even){ background:#334155; }
 </head>
 <body>
 
-<h1>📊 USDCHF Last 1000 1-Minute Candles with Indicators</h1>
+<h1>📊 USDCHF M1 Candle Streak Analysis</h1>
 <div id="loadingBarContainer">
   <div id="loadingBar">0%</div>
 </div>
+
 <button onclick="downloadCSV()">Download CSV</button>
 
-<table id="candleTable">
+<h2>Streaks Table</h2>
+<table id="streakTable">
   <thead>
     <tr>
       <th>Datetime</th>
@@ -36,22 +38,36 @@ tbody tr:nth-child(even){ background:#334155; }
       <th>Close</th>
       <th>Volume</th>
       <th>RSI14</th>
-      <th>Momentum10</th>
-      <th>Williams%R14</th>
-      <th>ATR14</th>
+      <th>Williams %R14</th>
+      <th>Streak Type</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<h2>Summary Table</h2>
+<table id="summaryTable">
+  <thead>
+    <tr>
+      <th>Streak Type</th>
+      <th>Most Frequent RSI</th>
+      <th>Median RSI</th>
+      <th>Most Frequent Williams %R</th>
+      <th>Median Williams %R</th>
+      <th>RSI vs WR Correlation</th>
     </tr>
   </thead>
   <tbody></tbody>
 </table>
 
 <script>
-const API_KEY = "b3f898dec7014a23aeddd60f2cb30fc6"; // Replace with your Twelve Data API key
+const API_KEY = "YOUR_API_KEY_HERE"; // Replace with your Twelve Data key
 const SYMBOL = "USD/CHF";
 const TOTAL_CANDLES = 1000;
-const CHUNK_SIZE = 125;       // 1000 / 125 = 8 API calls
-const REQUEST_DELAY = 8000;   // 8 seconds to respect 8 calls/min
+const CHUNK_SIZE = 125;    // 1000/125 = 8 requests
+const REQUEST_DELAY = 8000; // 8s delay for API limit
 
-let csvData = [["Datetime","Open","High","Low","Close","Volume","RSI14","Momentum10","Williams%R14","ATR14"]];
+let csvData = [["Datetime","Open","High","Low","Close","Volume","RSI14","WilliamsR14","StreakType"]];
 
 // Loading bar
 function updateLoadingBar(percent){
@@ -74,64 +90,45 @@ function rsi(closes, period=14){
     return 100-(100/(1+rs));
 }
 
-function momentum(closes, period=10){
-    if(closes.length <= period) return 0;
-    return closes[closes.length-1]-closes[closes.length-1-period];
-}
-
 function williamsR(highs,lows,closes,period=14){
     if(closes.length<period) return 0;
     let hh=Math.max(...highs.slice(-period));
     let ll=Math.min(...lows.slice(-period));
-    return ((hh-closes[closes.length-1])/(hh-ll))*-100;
+    return ((hh-closes[closes.length-1])/(hh-ll))*-100; // keep -100 → 0
 }
 
-function atr(highs,lows,closes,period=14){
-    if(closes.length<period) return 0;
-    let trs=[];
-    for(let i=1;i<highs.length;i++){
-        let tr=Math.max(highs[i]-lows[i], Math.abs(highs[i]-closes[i-1]), Math.abs(lows[i]-closes[i-1]));
-        trs.push(tr);
-    }
-    return trs.slice(-period).reduce((a,b)=>a+b,0)/period;
-}
-
-// Fetch candles with rate limit
+// Fetch candles respecting API limit
 async function getCandles(total, chunkSize){
     let allCandles=[];
     let remaining = total;
     let startDate = null;
     let chunksCompleted = 0;
-    let totalChunks = Math.ceil(total / chunkSize);
+    let totalChunks = Math.ceil(total/chunkSize);
 
-    while(remaining > 0){
+    while(remaining>0){
         let url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=1min&outputsize=${Math.min(chunkSize,remaining)}&apikey=${API_KEY}`;
         if(startDate) url += `&start_date=${startDate}`;
 
         try{
             const res = await fetch(url);
             const data = await res.json();
-            if(!data.values || data.values.length===0){ console.error("No data from API"); break; }
-
+            if(!data.values || data.values.length===0){ console.error("No data"); break; }
             let chunk = data.values.reverse(); // Oldest first
             allCandles = chunk.concat(allCandles);
             remaining -= chunk.length;
             startDate = chunk[0].datetime;
-
             chunksCompleted++;
-            updateLoadingBar(Math.floor((chunksCompleted/totalChunks)*90));
-
-            await delay(REQUEST_DELAY); // wait before next request
-            if(chunk.length < chunkSize) break;
-
-        } catch(e){ console.error("Fetch error:", e); break; }
+            updateLoadingBar(Math.floor((chunksCompleted/totalChunks)*50));
+            await delay(REQUEST_DELAY);
+            if(chunk.length<chunkSize) break;
+        }catch(e){ console.error("Fetch error:",e); break; }
     }
     return allCandles;
 }
 
 // Add a row to table
-function addRow(c){
-    const tableBody = document.querySelector("#candleTable tbody");
+function addStreakRow(c){
+    const tableBody = document.querySelector("#streakTable tbody");
     const row = tableBody.insertRow();
     row.insertCell(0).innerText = c.datetime;
     row.insertCell(1).innerText = c.open;
@@ -139,10 +136,9 @@ function addRow(c){
     row.insertCell(3).innerText = c.low;
     row.insertCell(4).innerText = c.close;
     row.insertCell(5).innerText = c.volume;
-    row.insertCell(6).innerText = c.RSI14.toFixed(2);
-    row.insertCell(7).innerText = c.Momentum10.toFixed(5);
-    row.insertCell(8).innerText = c.WilliamsR14.toFixed(2);
-    row.insertCell(9).innerText = c.ATR14.toFixed(5);
+    row.insertCell(6).innerText = c.rsi.toFixed(2);
+    row.insertCell(7).innerText = c.will.toFixed(2);
+    row.insertCell(8).innerText = c.streakType;
 }
 
 // Download CSV
@@ -150,10 +146,61 @@ function downloadCSV(){
     let csvContent = "data:text/csv;charset=utf-8," + csvData.map(e=>e.join(",")).join("\n");
     const link=document.createElement("a");
     link.setAttribute("href", csvContent);
-    link.setAttribute("download","USDCHF_1min_last1000_indicators.csv");
+    link.setAttribute("download","USDCHF_M1_Streaks.csv");
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+}
+
+// Helper for median
+function median(arr){
+    const s = [...arr].sort((a,b)=>a-b);
+    const mid = Math.floor(s.length/2);
+    return s.length%2===0 ? (s[mid-1]+s[mid])/2 : s[mid];
+}
+
+// Pearson correlation
+function pearsonCorrelation(x, y){
+    const n = x.length;
+    const avgX = x.reduce((a,b)=>a+b,0)/n;
+    const avgY = y.reduce((a,b)=>a+b,0)/n;
+    let numerator=0, denomX=0, denomY=0;
+    for(let i=0;i<n;i++){
+        const dx=x[i]-avgX, dy=y[i]-avgY;
+        numerator += dx*dy;
+        denomX += dx*dx;
+        denomY += dy*dy;
+    }
+    return numerator/Math.sqrt(denomX*denomY);
+}
+
+// Detect streaks
+function detectStreaks(candles){
+    let streaks=[], currentStreak=[], streakType=null;
+    for(let i=0;i<candles.length;i++){
+        const c=candles[i];
+        const isBull=c.close>c.open;
+        const isBear=c.close<c.open;
+
+        if((isBull && streakType==="bull")||(isBear && streakType==="bear")){
+            currentStreak.push(c);
+        }else{
+            if(currentStreak.length>=3) streaks.push({type:streakType, candles:currentStreak});
+            currentStreak = isBull?[c]:isBear?[c]:[];
+            streakType = isBull?"bull":isBear?"bear":null;
+        }
+    }
+    if(currentStreak.length>=3) streaks.push({type:streakType, candles:currentStreak});
+    return streaks;
+}
+
+// Most frequent helper
+function mostFrequent(arr){
+    const freq = {};
+    arr.forEach(v=>freq[v]=(freq[v]||0)+1);
+    let maxCount=0,value=null;
+    for(let k in freq){ if(freq[k]>maxCount){ maxCount=freq[k]; value=k; } }
+    return parseFloat(value);
 }
 
 // Main
@@ -161,24 +208,49 @@ async function run(){
     const candles = await getCandles(TOTAL_CANDLES, CHUNK_SIZE);
     if(!candles || candles.length===0){ alert("No data fetched"); return; }
 
+    // Calculate indicators per candle
     const closes = candles.map(c=>parseFloat(c.close));
     const highs = candles.map(c=>parseFloat(c.high));
     const lows = candles.map(c=>parseFloat(c.low));
 
-    for(let i=0;i<candles.length;i++){
-        const c=candles[i];
-        const open=parseFloat(c.open), high=parseFloat(c.high), low=parseFloat(c.low), close=parseFloat(c.close), volume=parseFloat(c.volume);
-        const rsi14=i>=14 ? rsi(closes.slice(i-14+1,i+1),14):0;
-        const mom10=i>=10 ? momentum(closes.slice(i-10+1,i+1),10):0;
-        const will14=i>=14 ? williamsR(highs.slice(i-14+1,i+1), lows.slice(i-14+1,i+1), closes.slice(i-14+1,i+1),14):0;
-        const atr14=i>=14 ? atr(highs.slice(i-14+1,i+1), lows.slice(i-14+1,i+1), closes.slice(i-14+1,i+1),14):0;
+    candles.forEach((c,i)=>{
+        c.rsi = i>=14?rsi(closes.slice(i-14+1,i+1),14):0;
+        c.will = i>=14?williamsR(highs.slice(i-14+1,i+1),lows.slice(i-14+1,i+1),closes.slice(i-14+1,i+1),14):0;
+    });
 
-        const rowObj = {datetime:c.datetime, open, high, low, close, volume, RSI14:rsi14, Momentum10:mom10, WilliamsR14:will14, ATR14:atr14};
-        addRow(rowObj);
-        csvData.push([c.datetime,open,high,low,close,volume,rsi14.toFixed(2),mom10.toFixed(5),will14.toFixed(2),atr14.toFixed(5)]);
-    }
+    updateLoadingBar(60);
 
-    updateLoadingBar(100); // complete
+    // Detect streaks
+    const streaks = detectStreaks(candles);
+
+    // Populate table & CSV
+    streaks.forEach(s=>{
+        s.candles.forEach(c=>{
+            addStreakRow({...c, streakType: s.type});
+            csvData.push([c.datetime,c.open,c.high,c.low,c.close,c.volume,c.rsi.toFixed(2),c.will.toFixed(2),s.type]);
+        });
+    });
+
+    updateLoadingBar(85);
+
+    // Summarize streaks
+    const types = ["bull","bear"];
+    types.forEach(t=>{
+        const all = streaks.filter(s=>s.type===t).flatMap(s=>s.candles);
+        if(all.length===0) return;
+
+        const rsiArr = all.map(c=>Math.round(c.rsi));
+        const willArr = all.map(c=>Math.round(c.will));
+        const row = document.querySelector("#summaryTable tbody").insertRow();
+        row.insertCell(0).innerText = t;
+        row.insertCell(1).innerText = mostFrequent(rsiArr);
+        row.insertCell(2).innerText = median(rsiArr);
+        row.insertCell(3).innerText = mostFrequent(willArr);
+        row.insertCell(4).innerText = median(willArr);
+        row.insertCell(5).innerText = pearsonCorrelation(rsiArr, willArr).toFixed(3);
+    });
+
+    updateLoadingBar(100);
 }
 
 run();
