@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Forex Momentum + ROC Consecutive Candle Analysis</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+    th { background-color: #f4f4f4; }
+    .bull { background-color: #d4f8d4; }
+    .bear { background-color: #f8d4d4; }
+  </style>
+</head>
+<body>
+  <h1>Forex Momentum + ROC Consecutive Candle Analysis</h1>
+  <p>Symbol: <strong id="symbol">EUR/USD</strong></p>
+  <p>Interval: <strong id="interval">5min</strong></p>
+
+  <table id="results">
+    <thead>
+      <tr>
+        <th>Candle Index</th>
+        <th>Direction</th>
+        <th>Momentum</th>
+        <th>ROC (%)</th>
+        <th>Consecutive Count</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+  // ================= SETTINGS =================
+  const API_KEY = 'YOUR_TWELVE_DATA_KEY'; // Replace with your Twelve Data API Key
+  const SYMBOL = 'EUR/USD';
+  const INTERVAL = '5min';
+  const MOM_LENGTH = 10;  // Momentum lookback
+  const ROC_LENGTH = 14;  // ROC lookback
+  const MIN_CONSECUTIVE = 2; // Minimum consecutive candles to count as strong
+
+  document.getElementById('symbol').innerText = SYMBOL;
+  document.getElementById('interval').innerText = INTERVAL;
+
+  // ================= UTILITY FUNCTIONS =================
+  function momentum(closeArr, index) {
+    return closeArr[index] - closeArr[index - MOM_LENGTH];
+  }
+
+  function roc(closeArr, index) {
+    return ((closeArr[index] - closeArr[index - ROC_LENGTH]) / closeArr[index - ROC_LENGTH]) * 100;
+  }
+
+  // ================= FETCH DATA =================
+  async function fetchData() {
+    const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=5000&apikey=${API_KEY}`;
+    try {
+      const resp = await fetch(url);
+      const data = await resp.json();
+      if(data.status === "error") {
+        console.error(data);
+        return [];
+      }
+      return data.values.reverse(); // oldest first
+    } catch(err) {
+      console.error("Error fetching data:", err);
+      return [];
+    }
+  }
+
+  // ================= ANALYSIS =================
+  function analyzeCandles(candles) {
+    const closeArr = candles.map(c => parseFloat(c.close));
+    const results = [];
+    let consecutiveCount = 1;
+
+    for(let i = Math.max(MOM_LENGTH, ROC_LENGTH); i < closeArr.length; i++) {
+      const mom = momentum(closeArr, i);
+      const r = roc(closeArr, i);
+      const direction = closeArr[i] > closeArr[i-1] ? 'Bull' : 'Bear';
+
+      // Track consecutive candles
+      const prevDirection = closeArr[i-1] > closeArr[i-2] ? 'Bull' : 'Bear';
+      consecutiveCount = (direction === prevDirection) ? consecutiveCount + 1 : 1;
+
+      // Record only if meets MIN_CONSECUTIVE
+      if(consecutiveCount >= MIN_CONSECUTIVE) {
+        results.push({
+          index: i,
+          direction: direction,
+          momentum: mom.toFixed(2),
+          roc: r.toFixed(2),
+          consecutive: consecutiveCount
+        });
+      }
+    }
+    return results;
+  }
+
+  // ================= DISPLAY RESULTS =================
+  function displayResults(results) {
+    const tbody = document.querySelector("#results tbody");
+    tbody.innerHTML = ''; // clear table
+
+    results.forEach(r => {
+      const tr = document.createElement("tr");
+      tr.className = r.direction.toLowerCase();
+      tr.innerHTML = `
+        <td>${r.index}</td>
+        <td>${r.direction}</td>
+        <td>${r.momentum}</td>
+        <td>${r.roc}</td>
+        <td>${r.consecutive}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ================= MAIN =================
+  async function main() {
+    const candles = await fetchData();
+    if(candles.length === 0) {
+      alert("No data fetched. Check your API key and internet connection.");
+      return;
+    }
+    const analysis = analyzeCandles(candles);
+    displayResults(analysis);
+  }
+
+  main();
+  </script>
+</body>
+</html>
