@@ -36,10 +36,11 @@ button:hover { background:#0ea5e9; }
 </div>
 
 <script>
-const API_KEY = "f6e69ff791404a24b736a913676eca5e";
+const API_KEY = "YOUR_API_KEY_HERE";
 const SYMBOL = "USD/CHF";
 const TIMEFRAMES = ["1min","3min","5min"];
-const LOOKBACK = 5000;
+const TOTAL_CANDLES = 5000; // target number of candles per TF
+const CHUNK_SIZE = 1000;    // fetch per API call
 
 let loggedTimes = new Set();
 let csvData = [["Time","TF","Direction","Streak","RSI","Momentum","WilliamsR","BodySize","ATR","Session","Gap"]];
@@ -50,13 +51,40 @@ function getSession(hour){
   else return "NY";
 }
 
-async function getCandles(interval, outputsize) {
-  const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${interval}&outputsize=${outputsize}&apikey=${API_KEY}`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return data.values ? data.values.reverse() : [];
+// Chunked fetch function
+async function getCandles(interval, total, chunkSize){
+  let allCandles = [];
+  let outputsize = Math.min(chunkSize, total);
+  let remaining = total;
+  let startDate = null;
+
+  while(remaining > 0){
+    let url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${interval}&outputsize=${outputsize}&apikey=${API_KEY}`;
+    if(startDate) url += `&start_date=${startDate}`;
+    
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      if(!data.values || data.values.length === 0){
+        console.error("No data returned from API", data);
+        break;
+      }
+
+      let chunk = data.values.reverse(); // oldest first
+      allCandles = chunk.concat(allCandles);
+      remaining -= chunk.length;
+      startDate = chunk[0].datetime; // move start for next chunk
+      if(chunk.length < chunkSize) break; // no more data
+    } catch(e){
+      console.error("Fetch error:", e);
+      break;
+    }
+  }
+
+  return allCandles;
 }
 
+// Indicator calculations
 function rsi(closes, period=14) {
   let gains=0, losses=0;
   for(let i=1;i<=period;i++){
@@ -141,6 +169,7 @@ function updateStats(){
     totalRSI+=rsiV; totalMom+=momV; totalBody+=bodyV;
   }
   let n = csvData.length-1;
+  if(n===0) return;
   document.getElementById("statText").innerHTML = `
     Total streaks: ${n}<br>
     UP streaks: ${upCount}, DOWN streaks: ${downCount}<br>
@@ -149,8 +178,9 @@ function updateStats(){
 }
 
 async function updateTF(tf){
-  let candles = await getCandles(tf, LOOKBACK);
+  let candles = await getCandles(tf, TOTAL_CANDLES, CHUNK_SIZE);
   if(!candles || candles.length<15) return;
+
   const closes = candles.map(c=>parseFloat(c.close));
   const highs = candles.map(c=>parseFloat(c.high));
   const lows = candles.map(c=>parseFloat(c.low));
