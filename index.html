@@ -18,7 +18,7 @@
 <div id="notification-summary"></div>
 
 <script>
-const API_KEY = 'f6e69ff791404a24b736a913676eca5e'; // Replace with your key
+const API_KEY = 'YOUR_TWELVE_DATA_KEY'; // Replace with your key
 const SYMBOL = 'EUR/USD';
 const INTERVAL = '5min';
 const MOM_LENGTH = 10;
@@ -27,12 +27,14 @@ const BIN_SIZE = 20;
 const BINS = [];
 for(let i=-100;i<100;i+=BIN_SIZE) BINS.push(i);
 
+let candles = []; // Cached candles
 let topZones = [];
 let lastCandleTime = null;
-let notificationLog = []; // Track all notifications
+let notificationLog = [];
 
 // ----------------- Utility Functions -----------------
 function normalizedMomentum(closeArr, index){
+    if(index < MOM_LENGTH) return 0;
     const mom = closeArr[index] - closeArr[index - MOM_LENGTH];
     let maxAbs = 0;
     for(let i=index-MOM_LENGTH+1;i<=index;i++){
@@ -46,6 +48,7 @@ function normalizedMomentum(closeArr, index){
 }
 
 function normalizedROC(closeArr,index){
+    if(index < ROC_LENGTH) return 0;
     const r = ((closeArr[index]-closeArr[index-ROC_LENGTH])/closeArr[index-ROC_LENGTH])*100;
     let maxAbs=0;
     for(let i=index-ROC_LENGTH+1;i<=index;i++){
@@ -58,16 +61,25 @@ function normalizedROC(closeArr,index){
     return Math.max(-100, Math.min(100,(r/maxAbs)*100));
 }
 
-// ----------------- Fetch Candles -----------------
-async function fetchCandles(){
-    const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=5000&apikey=${API_KEY}`;
+// ----------------- Fetch Historical Candles -----------------
+async function fetchHistoricalCandles(){
+    const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=1000&apikey=${API_KEY}`;
     const resp = await fetch(url);
     const data = await resp.json();
     if(data.status==="error"){ console.error(data); return []; }
     return data.values.reverse();
 }
 
-// ----------------- Analyze Top Zones -----------------
+// ----------------- Fetch Only Latest Candles -----------------
+async function fetchLatestCandles(){
+    const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=20&apikey=${API_KEY}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if(data.status==="error"){ console.error(data); return []; }
+    return data.values.reverse();
+}
+
+// ----------------- Find Top Zones -----------------
 function findTopZones(candles){
     const closeArr = candles.map(c=>parseFloat(c.close));
     const streaksBull={}, streaksBear={};
@@ -103,7 +115,6 @@ function findTopZones(candles){
         }
     }
 
-    // Store top 3 zones by frequency
     const collectZones = (heatmap, streaks, direction) => {
         const zones=[];
         BINS.forEach(m=>BINS.forEach(r=>{
@@ -129,8 +140,8 @@ function findTopZones(candles){
 }
 
 // ----------------- Check Latest Candle -----------------
-function checkCandle(candle, candles){
-    if(lastCandleTime === candle.datetime) return; // already alerted
+function checkCandle(candle){
+    if(lastCandleTime === candle.datetime) return;
     lastCandleTime = candle.datetime;
 
     const closeArr = candles.map(c=>parseFloat(c.close));
@@ -149,13 +160,13 @@ function checkCandle(candle, candles){
         }
     });
 
-    updateActualStreaks(candles);
+    updateActualStreaks();
     showNotificationSummary();
 }
 
 // ----------------- Send Browser Notification -----------------
 function sendNotification(zone, avgStreak, maxStreak, candleTime){
-    const body = `${zone.direction} streak likely ~${avgStreak} candles (historical max: ${maxStreak})\n`+
+    const body = `${zone.direction} streak likely ~${avgStreak} candles (max: ${maxStreak})\n`+
                  `Momentum: ${zone.momentum}-${zone.momentum+BIN_SIZE}, ROC: ${zone.roc}-${zone.roc+BIN_SIZE}`;
 
     if("Notification" in window && Notification.permission==="granted"){
@@ -177,7 +188,7 @@ function sendNotification(zone, avgStreak, maxStreak, candleTime){
 }
 
 // ----------------- Update Actual Streaks -----------------
-function updateActualStreaks(candles){
+function updateActualStreaks(){
     const closeArr = candles.map(c=>parseFloat(c.close));
     notificationLog.forEach(entry => {
         if(entry.actual === null){
@@ -216,7 +227,7 @@ function showNotificationSummary(){
 
 // ----------------- Main -----------------
 async function main(){
-    const candles = await fetchCandles();
+    candles = await fetchHistoricalCandles();
     if(candles.length===0){ alert("No data fetched!"); return; }
 
     topZones = findTopZones(candles);
@@ -225,13 +236,13 @@ async function main(){
         Notification.requestPermission();
     }
 
-    // Check latest candle every minute
+    // Check latest candles every minute (only last 20)
     setInterval(async ()=>{
-        const latestCandles = await fetchCandles();
-        if(latestCandles.length>0){
-            const lastCandle = latestCandles[latestCandles.length-1];
-            checkCandle(lastCandle, latestCandles);
-        }
+        const latestCandles = await fetchLatestCandles();
+        latestCandles.forEach(c => {
+            if(!candles.find(x=>x.datetime===c.datetime)) candles.push(c);
+        });
+        if(candles.length>0) checkCandle(candles[candles.length-1]);
     }, 60*1000);
 }
 
