@@ -2,18 +2,33 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Streak Indicator Analysis</title>
+<title>Real-Time Streak Trading Research Tool</title>
 <style>
   body { font-family: Arial, sans-serif; margin: 20px; }
   #progressContainer { width: 100%; background: #ddd; margin-bottom: 20px; }
   #progressBar { width: 0%; height: 25px; background: #4CAF50; text-align: center; color: white; }
   table, th, td { border: 1px solid black; border-collapse: collapse; padding: 5px; }
   th { background: #f2f2f2; }
+  .countdown { font-weight: bold; color: darkblue; }
+  #lastUpdated { margin-top: 10px; font-style: italic; }
+  #alertPopup {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #ffeb3b;
+      padding: 15px 25px;
+      border: 2px solid #fbc02d;
+      font-size: 18px;
+      font-weight: bold;
+      display: none;
+      z-index: 9999;
+  }
 </style>
 </head>
 <body>
 
-<h2>EUR/USD 5-Min Candle Streak Analysis</h2>
+<h2>EUR/USD Real-Time Streak Research Tool</h2>
+<h3 id="forecast">Forecast loading...</h3>
 
 <div id="progressContainer">
   <div id="progressBar">0%</div>
@@ -22,141 +37,180 @@
 <table id="resultTable">
   <thead>
     <tr>
-      <th>Streak Type</th>
-      <th>Start Time</th>
-      <th>Length</th>
-      <th>AO%</th>
-      <th>ROC%</th>
-      <th>MACD Hist%</th>
-      <th>MOM%</th>
+      <th>Direction</th>
+      <th>Streak Length</th>
+      <th>Total</th>
+      <th>Wins</th>
+      <th>Win Rate %</th>
+      <th>Avg Gap (min)</th>
+      <th>Momentum %</th>
+      <th>Trend Bias %</th>
+      <th>Forecast Next Start</th>
+      <th>Countdown</th>
     </tr>
   </thead>
   <tbody></tbody>
 </table>
 
+<div id="lastUpdated">Last Updated: --</div>
+<div id="alertPopup"></div>
+
 <script>
-const API_KEY = 'b3f898dec7014a23aeddd60f2cb30fc6'; // <-- Enter your API key here
+const API_KEY = 'b3f898dec7014a23aeddd60f2cb30fc6'; // replace with your API key
 const SYMBOL = 'EUR/USD';
 const INTERVAL = '5min';
-const MAX_REQUESTS_PER_MINUTE = 8;
+const REFRESH_INTERVAL = 15*1000; // refresh every 15 seconds
+let lastAlertShown = {}; // track last shown alerts per streak
 
-async function fetchCandleData() {
-    const outputsize = 500;
-    const url = `https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=${outputsize}&apikey=${API_KEY}`;
-    const response = await fetch(url);
-    const data = await response.json();
-    if (data.values) return data.values.reverse(); // oldest → newest
-    throw new Error('API Error or empty data');
-}
+// --------------------------- Helpers ---------------------------
+function average(arr){ return arr.reduce((a,b)=>a+b,0)/arr.length; }
+function ema(values){ const k=2/(values.length+1); return values.reduce((prev,curr,i)=>i===0?curr:prev*(1-k)+curr*k); }
+function normalizeToPercent(arr){ const min=Math.min(...arr); const max=Math.max(...arr); return max===min?arr.map(_=>50):arr.map(v=>((v-min)/(max-min))*100); }
 
-// Utility: Calculate indicators from OHLC
-function calculateIndicators(candles) {
-    const results = candles.map((c, i) => {
-        const close = parseFloat(c.close);
-        const open = parseFloat(c.open);
-        // AO: SMA(5) - SMA(34) on (High+Low)/2
-        let ao = 0;
-        if (i >= 34) {
-            const sma5 = average(candles.slice(i-5+1,i+1).map(x => (parseFloat(x.high)+parseFloat(x.low))/2));
-            const sma34 = average(candles.slice(i-34+1,i+1).map(x => (parseFloat(x.high)+parseFloat(x.low))/2));
-            ao = sma5 - sma34;
-        }
-        // ROC: Rate of Change
-        let roc = 0;
-        if (i >= 1) roc = ((close - parseFloat(candles[i-1].close)) / parseFloat(candles[i-1].close)) * 100;
-        // MACD Histogram approximation: EMA12-EMA26 for simplicity
-        let macdHist = 0;
-        if (i >= 26) {
-            const ema12 = ema(candles.slice(i-12+1,i+1).map(x => parseFloat(x.close)));
-            const ema26 = ema(candles.slice(i-26+1,i+1).map(x => parseFloat(x.close)));
-            macdHist = ema12 - ema26;
-        }
-        // MOM: close - close[n-1]
-        let mom = 0;
-        if (i >= 1) mom = close - parseFloat(candles[i-1].close);
-        return { datetime: c.datetime, close, ao, roc, macdHist, mom, direction: close > open ? 'Bull' : 'Bear' };
-    });
-    return results;
-}
-
-// Helpers
-function average(arr) { return arr.reduce((a,b)=>a+b,0)/arr.length; }
-function ema(values) {
-    const k = 2 / (values.length + 1);
-    return values.reduce((prev,curr,i) => i===0 ? curr : curr*k + prev*(1-k));
-}
-function normalizeToPercent(arr) {
-    const min = Math.min(...arr);
-    const max = Math.max(...arr);
-    return arr.map(v => ((v - min) / (max - min))*100);
-}
-
-// Track streaks >=3
-function detectStreaks(data) {
-    const streaks = [];
-    let current = null;
-    for (let i=0;i<data.length;i++) {
-        if (!current) {
-            current = { type: data[i].direction, startTime: data[i].datetime, length: 1, ao:[data[i].ao], roc:[data[i].roc], macd:[data[i].macdHist], mom:[data[i].mom] };
-        } else if (data[i].direction === current.type) {
-            current.length++;
-            current.ao.push(data[i].ao);
-            current.roc.push(data[i].roc);
-            current.macd.push(data[i].macdHist);
-            current.mom.push(data[i].mom);
-        } else {
-            if (current.length >= 3) streaks.push(current);
-            current = { type: data[i].direction, startTime: data[i].datetime, length:1, ao:[data[i].ao], roc:[data[i].roc], macd:[data[i].macdHist], mom:[data[i].mom] };
-        }
+// --------------------------- API-Safe Fetch ---------------------------
+let requestTimestamps = [];
+async function safeFetchCandles(){
+    const now = Date.now();
+    requestTimestamps = requestTimestamps.filter(ts => now - ts < 60000);
+    if(requestTimestamps.length >= 8){
+        console.warn("API limit reached. Skipping this fetch.");
+        return null;
     }
-    if (current && current.length >=3) streaks.push(current);
+    requestTimestamps.push(now);
+    const url=`https://api.twelvedata.com/time_series?symbol=${SYMBOL}&interval=${INTERVAL}&outputsize=500&apikey=${API_KEY}`;
+    const response=await fetch(url);
+    const data=await response.json();
+    if(data.values) return data.values.reverse();
+    throw new Error("API Error or empty data");
+}
+
+// --------------------------- Indicators ---------------------------
+function calculateIndicators(candles){
+    return candles.map((c,i)=>{
+        const close=parseFloat(c.close), open=parseFloat(c.open);
+        let ao=0; if(i>=34){ const sma5=average(candles.slice(i-4,i+1).map(x=>(parseFloat(x.high)+parseFloat(x.low))/2)); const sma34=average(candles.slice(i-33,i+1).map(x=>(parseFloat(x.high)+parseFloat(x.low))/2)); ao=sma5-sma34;}
+        let roc=0; if(i>=1) roc=((close-parseFloat(candles[i-1].close))/parseFloat(candles[i-1].close))*100;
+        let macd=0; if(i>=26){ const ema12=ema(candles.slice(i-11,i+1).map(x=>parseFloat(x.close))); const ema26=ema(candles.slice(i-25,i+1).map(x=>parseFloat(x.close))); macd=ema12-ema26;}
+        let mom=0; if(i>=1) mom=close-parseFloat(candles[i-1].close);
+        return {datetime:c.datetime, close, ao, roc, macd, mom, direction: close>open?'Bull':'Bear'};
+    });
+}
+
+// --------------------------- Detect Streaks ---------------------------
+function detectStreaks(data){
+    const streaks=[]; let current=null;
+    for(let i=0;i<data.length;i++){
+        if(!current){ current={type:data[i].direction,startTime:data[i].datetime,startIndex:i,length:1,ao:[data[i].ao],roc:[data[i].roc],macd:[data[i].macd],mom:[data[i].mom]};}
+        else if(data[i].direction===current.type){ current.length++; current.ao.push(data[i].ao); current.roc.push(data[i].roc); current.macd.push(data[i].macd); current.mom.push(data[i].mom);}
+        else{ if(current.length>=3){ current.endIndex=i-1; current.endTime=data[i-1].datetime; streaks.push(current);} current={type:data[i].direction,startTime:data[i].datetime,startIndex:i,length:1,ao:[data[i].ao],roc:[data[i].roc],macd:[data[i].macd],mom:[data[i].mom]}; }
+    }
+    if(current && current.length>=3){ current.endIndex=data.length-1; current.endTime=data[data.length-1].datetime; streaks.push(current);}
     return streaks;
 }
 
-// Update table and loading
-function updateTable(streaks) {
-    const tbody = document.querySelector('#resultTable tbody');
-    tbody.innerHTML = '';
-    streaks.forEach(s => {
-        const aoPercent = normalizeToPercent(s.ao).reduce((a,b)=>a+b,0)/s.ao.length;
-        const rocPercent = normalizeToPercent(s.roc).reduce((a,b)=>a+b,0)/s.roc.length;
-        const macdPercent = normalizeToPercent(s.macd).reduce((a,b)=>a+b,0)/s.macd.length;
-        const momPercent = normalizeToPercent(s.mom).reduce((a,b)=>a+b,0)/s.mom.length;
-        const row = document.createElement('tr');
-        row.innerHTML = `<td>${s.type}</td><td>${s.startTime}</td><td>${s.length}</td>
-            <td>${aoPercent.toFixed(1)}</td>
-            <td>${rocPercent.toFixed(1)}</td>
-            <td>${macdPercent.toFixed(1)}</td>
-            <td>${momPercent.toFixed(1)}</td>`;
-        tbody.appendChild(row);
-    });
-}
-
-// Loading bar
-function updateProgress(p) {
-    const bar = document.getElementById('progressBar');
-    bar.style.width = `${p}%`;
-    bar.textContent = `${p}%`;
-}
-
-// Main
-async function main() {
-    updateProgress(0);
-    try {
-        const candles = await fetchCandleData();
-        updateProgress(30);
-        const indicators = calculateIndicators(candles);
-        updateProgress(60);
-        const streaks = detectStreaks(indicators);
-        updateProgress(90);
-        updateTable(streaks);
-        updateProgress(100);
-    } catch(e) {
-        alert('Error fetching data: ' + e.message);
+// --------------------------- Compute Trend Bias ---------------------------
+function computeStreakTrendBias(streaks,data){
+    const midpoint=Math.floor(streaks.length/2);
+    const oldStats={}, recentStats={};
+    function collectStats(arr,store){
+        arr.forEach(s=>{
+            if(s.endIndex<data.length-1){
+                const win=data[s.endIndex+1].direction===s.type;
+                if(!store[s.type]) store[s.type]={}; if(!store[s.type][s.length]) store[s.type][s.length]={total:0,wins:0};
+                store[s.type][s.length].total++; if(win) store[s.type][s.length].wins++;
+            }
+        });
     }
+    collectStats(streaks.slice(0,midpoint),oldStats); collectStats(streaks.slice(midpoint),recentStats);
+    const bias={};
+    Object.keys(recentStats).forEach(dir=>{
+        bias[dir]={};
+        Object.keys(recentStats[dir]).forEach(len=>{
+            if(oldStats[dir] && oldStats[dir][len]){
+                const oldRate=oldStats[dir][len].wins/oldStats[dir][len].total;
+                const newRate=recentStats[dir][len].wins/recentStats[dir][len].total;
+                bias[dir][len]=(newRate-oldRate)*100;
+            }
+        });
+    });
+    return bias;
 }
 
-main();
+// --------------------------- Show Pop-up Alert ---------------------------
+function showAlert(message){
+    const popup = document.getElementById("alertPopup");
+    popup.innerText = message;
+    popup.style.display = "block";
+    setTimeout(()=>{ popup.style.display = "none"; },15000); // hide after 15s
+}
+
+// --------------------------- Update Table & Forecast ---------------------------
+function updateTable(streaks,data){
+    const tbody=document.querySelector('#resultTable tbody'); tbody.innerHTML='';
+    const statsByDirLen={};
+    const now = new Date();
+
+    streaks.forEach((s,i)=>{
+        if(!statsByDirLen[s.type]) statsByDirLen[s.type]={};
+        if(!statsByDirLen[s.type][s.length]) statsByDirLen[s.type][s.length]={streaks:[],total:0,wins:0,gaps:[],momentum:[]};
+        const seg=statsByDirLen[s.type][s.length];
+        seg.streaks.push(s); seg.total++;
+        if(s.endIndex<data.length-1){ const win=data[s.endIndex+1].direction===s.type; if(win) seg.wins++; }
+        seg.momentum.push(average(normalizeToPercent([average(s.ao),average(s.roc),average(s.macd),average(s.mom)])));
+        if(i<streaks.length-1){ const next=streaks.slice(i+1).find(x=>x.type===s.type && x.length===s.length); if(next){ const gap=(new Date(next.startTime)-new Date(s.endTime))/60000; seg.gaps.push(gap); }}
+    });
+
+    const trendBias=computeStreakTrendBias(streaks,data);
+
+    // Render table with countdown and detect imminent streaks
+    Object.keys(statsByDirLen).forEach(dir=>{
+        Object.keys(statsByDirLen[dir]).sort((a,b)=>a-b).forEach(len=>{
+            const seg=statsByDirLen[dir][len];
+            const avgGap=seg.gaps.length?average(seg.gaps).toFixed(1):'N/A';
+            const avgMomentum=seg.momentum.length?average(seg.momentum).toFixed(1):'N/A';
+            const bias=trendBias[dir] && trendBias[dir][len]!==undefined?trendBias[dir][len].toFixed(1):'N/A';
+            const lastStreak=seg.streaks[seg.streaks.length-1];
+            const forecastTime=lastStreak && seg.gaps.length? new Date(new Date(lastStreak.endTime).getTime()+average(seg.gaps)*60000):null;
+            const countdown=forecastTime?Math.max(0,Math.floor((forecastTime-now)/1000)):'N/A';
+
+            // Show pop-up if countdown <= REFRESH_INTERVAL/1000 and not shown recently
+            const alertKey = dir+'-'+len;
+            if(countdown !== 'N/A' && countdown <= REFRESH_INTERVAL/1000 && !lastAlertShown[alertKey]){
+                showAlert(`⚡ Imminent ${dir} streak of length ${len} expected now!`);
+                lastAlertShown[alertKey] = true;
+                // reset alert after 30s
+                setTimeout(()=>{ lastAlertShown[alertKey]=false; },30000);
+            }
+
+            const row=document.createElement('tr');
+            row.innerHTML=`<td>${dir}</td><td>${len}</td><td>${seg.total}</td><td>${seg.wins}</td><td>${((seg.wins/seg.total)*100).toFixed(2)}</td><td>${avgGap}</td><td>${avgMomentum}</td><td>${bias}</td><td>${forecastTime?forecastTime.toLocaleString():'N/A'}</td><td class="countdown">${countdown==='N/A'?'N/A':countdown+'s'}</td>`;
+            tbody.appendChild(row);
+        });
+    });
+
+    document.getElementById("lastUpdated").innerText = `Last Updated: ${now.toLocaleTimeString()}`;
+    document.getElementById("forecast").innerHTML="✅ Real-time directional streak forecasts (updates every 15s)";
+}
+
+// --------------------------- Progress ---------------------------
+function updateProgress(p){ const bar=document.getElementById('progressBar'); bar.style.width=`${p}%`; bar.textContent=`${p}%`; }
+
+// --------------------------- Main Loop ---------------------------
+async function mainLoop(){
+    updateProgress(0);
+    try{
+        const candles = await safeFetchCandles();
+        if(!candles) return; // skip if API limit reached
+        updateProgress(30);
+        const indicators = calculateIndicators(candles); updateProgress(60);
+        const streaks = detectStreaks(indicators); updateProgress(90);
+        updateTable(streaks, indicators); updateProgress(100);
+    } catch(e){ alert("Error: "+e.message);}
+}
+
+// Run first time, then refresh every REFRESH_INTERVAL ms
+mainLoop();
+setInterval(mainLoop, REFRESH_INTERVAL);
 </script>
 
 </body>
